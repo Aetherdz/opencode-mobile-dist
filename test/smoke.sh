@@ -106,20 +106,6 @@ exit 0
 EOF
 chmod +x "$FAKE_BIN/opencode"
 
-# An existing bridge with missing launchers must persist the new installer
-# before writing launchers that delegate back to it.
-REPAIR_PREFIX="$WORK/repair-prefix"
-REPAIR_BIN="$WORK/repair-bin"
-mkdir -p "$REPAIR_PREFIX/bridge/current/dist" "$REPAIR_PREFIX/bridge/current/node_modules" "$REPAIR_BIN"
-cp "$WORK/bundle/package.json" "$REPAIR_PREFIX/bridge/current/package.json"
-cp "$WORK/bundle/dist/index.js" "$REPAIR_PREFIX/bridge/current/dist/index.js"
-cp "$ROOT_DIR/install.sh" "$REPAIR_PREFIX/bridge/current/unused"
-printf 'PORT=8787\nHOST=127.0.0.1\nAUTH_TOKEN=%064d\nALLOWED_WORKDIRS="%s"\nDATA_DIR="%s"\n' 0 "$WORKDIR" "$DATA_HOME" > "$CONFIG_HOME/opencode-mobile/bridge.env"
-"$ROOT_DIR/install.sh" setup --prefix "$REPAIR_PREFIX" --bin-dir "$REPAIR_BIN" --workdir "$WORKDIR" --no-color >/dev/null
-test -x "$REPAIR_BIN/opencode-mobile-installer"
-test -x "$REPAIR_BIN/opencode-mobile"
-grep -q 'opencode-mobile-installer" up' "$REPAIR_BIN/opencode-mobile"
-
 STREAM_PREFIX="$WORK/stream-prefix"
 STREAM_BIN="$WORK/stream-bin"
 STREAM_CONFIG="$WORK/stream-config"
@@ -136,6 +122,11 @@ grep -q 'opencode-mobile-installer" up' "$STREAM_BIN/opencode-mobile"
 cmp "$ROOT_DIR/install.sh" "$STREAM_BIN/opencode-mobile-installer"
 test ! -e "$WORK"/opencode-mobile-installer.*
 export XDG_CONFIG_HOME="$CONFIG_HOME" XDG_DATA_HOME="$DATA_HOME"
+mv "$BIN_DIR/opencode-mobile" "$BIN_DIR/opencode-mobile.old"
+"$ROOT_DIR/install.sh" setup --prefix "$PREFIX" --bin-dir "$BIN_DIR" --workdir "$WORKDIR" --no-color >/dev/null
+test -x "$BIN_DIR/opencode-mobile"
+test -x "$BIN_DIR/opencode-mobile-installer"
+grep -q 'opencode-mobile-installer" up' "$BIN_DIR/opencode-mobile"
 "$ROOT_DIR/install.sh" doctor --prefix "$PREFIX" --bin-dir "$BIN_DIR" --no-color
 "$ROOT_DIR/install.sh" status --prefix "$PREFIX" --bin-dir "$BIN_DIR" --no-color
 before="$(awk -F= '/^AUTH_TOKEN=/{print $2}' "$CONFIG_HOME/opencode-mobile/bridge.env")"

@@ -531,7 +531,17 @@ install_bridge() {
       return 0
     fi
     if [[ "${UI_MINIMAL:-0}" != 1 ]]; then ok "Keeping the existing bridge installation"; fi
-    if [[ "${UI_MINIMAL:-0}" == 1 ]]; then persist_installer; fi
+    if [[ "${UI_MINIMAL:-0}" == 1 ]]; then
+      persist_installer
+      if [ ! -x "$BIN_DIR/opencode-mobile" ]; then
+        cat > "$BIN_DIR/opencode-mobile" <<EOF
+#!/usr/bin/env sh
+set -eu
+exec "$BIN_DIR/opencode-mobile-installer" up "\$@"
+EOF
+        chmod 755 "$BIN_DIR/opencode-mobile"
+      fi
+    fi
     return 0
   fi
   if [ -d "$PREFIX/bridge/current" ] && { [ ! -x "$BIN_DIR/opencode-mobile" ] || [ ! -x "$BIN_DIR/opencode-mobile-bridge" ]; }; then

@@ -10,7 +10,7 @@ installer snapshots are not supported.
 Do not open a public issue for a security problem. Use GitHub's private
 vulnerability reporting on the main repository:
 
-https://github.com/zaikabdou1/opencode-mobile/security/advisories/new
+https://github.com/Aetherdz/opencode-mobile/security/advisories/new
 
 Include the installer version, operating system, the affected command, and
 reproduction steps. Remove tokens, personal paths, and private source code from

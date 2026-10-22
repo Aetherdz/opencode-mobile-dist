@@ -1,6 +1,6 @@
 # OpenCode Mobile distribution
 
-Terminal installers for [OpenCode Mobile](https://github.com/zaikabdou1/opencode-mobile),
+Terminal installers for [OpenCode Mobile](https://github.com/Aetherdz/opencode-mobile),
 an unofficial mobile and web client for a local OpenCode service.
 
 This repository contains the installers, checksums policy, and release
@@ -26,7 +26,7 @@ guide.
 Inspect the script before running it:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/zaikabdou1/opencode-mobile-dist/main/install.sh
+curl -fsSLO https://raw.githubusercontent.com/Aetherdz/opencode-mobile-dist/main/install.sh
 less install.sh
 bash install.sh install --workdir "$HOME/projects"
 ```
@@ -34,7 +34,7 @@ bash install.sh install --workdir "$HOME/projects"
 Or run from a clone:
 
 ```bash
-git clone https://github.com/zaikabdou1/opencode-mobile-dist.git
+git clone https://github.com/Aetherdz/opencode-mobile-dist.git
 cd opencode-mobile-dist
 ./install.sh install --workdir "$HOME/projects"
 ```

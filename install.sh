@@ -7,14 +7,14 @@
 set -euo pipefail
 
 INSTALLER_VERSION="0.1.0"
-DEFAULT_REPO="zaikabdou1/opencode-mobile"
+DEFAULT_REPO="Aetherdz/opencode-mobile"
 DEFAULT_PREFIX="${XDG_DATA_HOME:-$HOME/.local/share}/opencode-mobile"
 DEFAULT_BIN_DIR="$HOME/.local/bin"
 DEFAULT_WORKDIR="$HOME/projects"
 DEFAULT_DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/opencode-mobile/data"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/opencode-mobile"
 CONFIG_FILE="$CONFIG_DIR/bridge.env"
-PACKAGE_ID="com.zaikabdou1.opencodemobile"
+PACKAGE_ID="com.aetherdz.opencodemobile"
 
 REPO="$DEFAULT_REPO"
 PREFIX="$DEFAULT_PREFIX"
@@ -90,7 +90,7 @@ Options:
   --prefix DIR      Install root. Default: ~/.local/share/opencode-mobile
   --bin-dir DIR     Launcher directory. Default: ~/.local/bin
   --workdir DIR     Directory the bridge may access. Default: ~/projects
-  --repo OWNER/REPO Source repository. Default: zaikabdou1/opencode-mobile
+  --repo OWNER/REPO Source repository. Default: Aetherdz/opencode-mobile
   --release TAG     Release tag to install. Default: latest release
   --dry-run         Print actions without downloading or writing files.
   --no-color        Disable ANSI color.

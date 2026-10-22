@@ -16,7 +16,7 @@ param(
     [string]$WorkDir = "",
     [string]$DataDir = "",
     [string]$ConfigFile = "",
-    [string]$Repo = "zaikabdou1/opencode-mobile",
+    [string]$Repo = "Aetherdz/opencode-mobile",
     [string]$Release = "",
 
     [switch]$DryRun,
@@ -30,7 +30,7 @@ $ProgressPreference = "SilentlyContinue"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $script:InstallerVersion = "0.1.0"
-$script:PackageId = "com.zaikabdou1.opencodemobile"
+$script:PackageId = "com.aetherdz.opencodemobile"
 $script:NoColorOutput = [bool]$NoColor
 $script:Prefix = ""
 $script:BinDir = ""
@@ -155,7 +155,7 @@ Options:
   -WorkDir DIR     Directory the bridge may access. Default: %USERPROFILE%\projects
   -DataDir DIR     Bridge data directory. Default: <prefix>\data
   -ConfigFile FILE Config path. Default: %APPDATA%\opencode-mobile\bridge.env
-  -Repo OWNER/REPO Source repository. Default: zaikabdou1/opencode-mobile
+  -Repo OWNER/REPO Source repository. Default: Aetherdz/opencode-mobile
   -Release TAG     Release tag. Default: latest release
   -DryRun          Print actions without downloading or writing files.
   -NoColor         Disable colored output.

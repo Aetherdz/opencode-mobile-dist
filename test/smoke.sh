@@ -106,6 +106,16 @@ exit 0
 EOF
 chmod +x "$FAKE_BIN/opencode"
 
+# setup repairs a missing primary launcher on an existing install.
+mv "$BIN_DIR/opencode-mobile" "$BIN_DIR/opencode-mobile.old"
+mv "$BIN_DIR/opencode-mobile-apk" "$BIN_DIR/opencode-mobile-apk.old"
+mv "$BIN_DIR/opencode-mobile-installer" "$BIN_DIR/opencode-mobile-installer.old"
+"$ROOT_DIR/install.sh" setup --prefix "$PREFIX" --bin-dir "$BIN_DIR" --workdir "$WORKDIR" --no-color >/dev/null
+test -x "$BIN_DIR/opencode-mobile"
+test -x "$BIN_DIR/opencode-mobile-apk"
+test -x "$BIN_DIR/opencode-mobile-installer"
+grep -q 'opencode-mobile-installer" up' "$BIN_DIR/opencode-mobile"
+
 STREAM_PREFIX="$WORK/stream-prefix"
 STREAM_BIN="$WORK/stream-bin"
 STREAM_CONFIG="$WORK/stream-config"
@@ -122,11 +132,6 @@ grep -q 'opencode-mobile-installer" up' "$STREAM_BIN/opencode-mobile"
 cmp "$ROOT_DIR/install.sh" "$STREAM_BIN/opencode-mobile-installer"
 test ! -e "$WORK"/opencode-mobile-installer.*
 export XDG_CONFIG_HOME="$CONFIG_HOME" XDG_DATA_HOME="$DATA_HOME"
-mv "$BIN_DIR/opencode-mobile" "$BIN_DIR/opencode-mobile.old"
-"$ROOT_DIR/install.sh" setup --prefix "$PREFIX" --bin-dir "$BIN_DIR" --workdir "$WORKDIR" --no-color >/dev/null
-test -x "$BIN_DIR/opencode-mobile"
-test -x "$BIN_DIR/opencode-mobile-installer"
-grep -q 'opencode-mobile-installer" up' "$BIN_DIR/opencode-mobile"
 "$ROOT_DIR/install.sh" doctor --prefix "$PREFIX" --bin-dir "$BIN_DIR" --no-color
 "$ROOT_DIR/install.sh" status --prefix "$PREFIX" --bin-dir "$BIN_DIR" --no-color
 before="$(awk -F= '/^AUTH_TOKEN=/{print $2}' "$CONFIG_HOME/opencode-mobile/bridge.env")"

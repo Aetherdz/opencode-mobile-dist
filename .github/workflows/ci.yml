@@ -1,0 +1,69 @@
+name: Installer CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shell:
+    name: Shell installer
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Syntax
+        run: bash -n install.sh
+
+      - name: Help and version
+        run: |
+          ./install.sh --help >/dev/null
+          ./install.sh --version
+
+      - name: Dry run writes nothing
+        run: |
+          tmp="$(mktemp -d)"
+          XDG_CONFIG_HOME="$tmp/config" XDG_DATA_HOME="$tmp/data" \
+            ./install.sh install --dry-run --no-color \
+              --prefix "$tmp/prefix" --bin-dir "$tmp/bin" --workdir "$tmp/work"
+          test ! -e "$tmp/prefix"
+          test ! -e "$tmp/config/opencode-mobile"
+
+      - name: Offline smoke test
+        run: bash test/smoke.sh
+
+  powershell:
+    name: PowerShell installer
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Parse
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path ./install.ps1), [ref]$null, [ref]$errors
+          ) | Out-Null
+          if ($errors.Count) {
+            $errors | Format-List | Out-String | Write-Error
+            exit 1
+          }
+
+      - name: Dry run writes nothing
+        shell: bash
+        run: |
+          tmp="$(mktemp -d)"
+          pwsh -NoProfile -File ./install.ps1 -Command install -DryRun -NoColor \
+            -Prefix "$tmp/prefix" -BinDir "$tmp/bin" -WorkDir "$tmp/work" \
+            -DataDir "$tmp/data" -ConfigFile "$tmp/config/bridge.env"
+          test ! -e "$tmp/prefix"
+          test ! -e "$tmp/config"

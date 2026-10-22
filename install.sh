@@ -534,7 +534,7 @@ install_bridge() {
       # Repair launchers independently: the bridge can already be present while
       # a user removed just the primary command. setup's source must be saved
       # before generating launchers that call the saved installer.
-      if [ ! -x "$BIN_DIR/opencode-mobile" ] || [ ! -x "$BIN_DIR/opencode-mobile-bridge" ]; then
+      if [ ! -x "$BIN_DIR/opencode-mobile" ] || [ ! -x "$BIN_DIR/opencode-mobile-bridge" ] || [ ! -x "$BIN_DIR/opencode-mobile-installer" ] || [ ! -x "$PREFIX/installer" ]; then
         mkdir -p "$BIN_DIR"
         persist_installer
       fi
@@ -1136,6 +1136,7 @@ do_setup() {
     ui_restore_cursor
     printf '%s→ Installed successfully%s\n' "$UI_GREEN" "$UI_RESET" >&3
     printf '%sRun this to start: %sopencode-mobile%s\n' "$UI_DIM" "$UI_YELLOW" "$UI_RESET" >&3
+    printf '%sPair your phone: %sopencode-mobile --copy-pairing%s (keep this terminal open)\n' "$UI_DIM" "$UI_YELLOW" "$UI_RESET" >&3
     UI_CURSOR_HIDDEN=0
   else
     printf '\nSetup complete. Run: opencode-mobile\n'

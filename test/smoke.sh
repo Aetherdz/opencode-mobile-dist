@@ -89,6 +89,7 @@ cmp "$INSTALLER_COPY" "$BIN_DIR/opencode-mobile-installer"
 output="$("$ROOT_DIR/install.sh" setup --prefix "$PREFIX" --bin-dir "$BIN_DIR" --workdir "$WORKDIR" --no-color)"
 printf '%s\n' "$output" | grep -q 'Installed successfully'
 printf '%s\n' "$output" | grep -q 'Run this to start:'
+printf '%s\n' "$output" | grep -q 'opencode-mobile --copy-pairing'
 printf '%s\n' "$output" | grep -q '→ Installing'
 if printf '%s\n' "$output" | grep -Eq 'Release:|Checksum verified|WARN|ERROR'; then
   echo "setup output contains verbose diagnostics" >&2
@@ -157,6 +158,10 @@ test "$before" = "$after"
 
 test ! -e "$PREFIX/bridge"
 test ! -e "$BIN_DIR/opencode-mobile-bridge"
+test ! -e "$BIN_DIR/opencode-mobile"
+test ! -e "$BIN_DIR/opencode-mobile-up"
+test ! -e "$BIN_DIR/opencode-mobile-down"
+test ! -e "$BIN_DIR/opencode-mobile-apk"
 test ! -e "$CONFIG_HOME/opencode-mobile"
 
 echo "smoke test passed"

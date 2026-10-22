@@ -11,12 +11,14 @@ binaries are attached to that repository's GitHub Releases.
 
 - Installs the authenticated bridge into a versioned directory.
 - Generates a random `AUTH_TOKEN` locally and writes it to a private config
-  file. The token is shown only during `up` in the local terminal.
+  file. The token is shown only during `up` in the local terminal. Config files
+  use restrictive owner-only permissions/ACLs where supported.
 - Creates a launcher in your user `bin` directory.
 - Optionally downloads and installs the Android APK through `adb`.
 - Verifies every downloaded asset against the release `SHA256SUMS`.
 - Provides `doctor`, `update`, and `uninstall` commands.
-- Prints a phone pairing QR, URL, and token on startup (QR rendering requires `qrencode`).
+- On Linux/macOS, prints a phone pairing QR, URL, and token on startup (QR
+  rendering requires `qrencode`).
 
 The bridge listens on `127.0.0.1:8787` by default. Remote access is expected to
 go through Tailscale or a reverse proxy; see the main repository's deployment
@@ -32,7 +34,7 @@ against `SHA256SUMS`.
 curl -fsSL https://raw.githubusercontent.com/Aetherdz/opencode-mobile-dist/main/install.sh | bash -s -- setup
 ```
 
-After setup, start it with just `opencode-mobile` (no `up`).
+On Linux/macOS, after setup, start it with just `opencode-mobile` (no `up`).
 
 This command invokes the installer directly; use it only if you trust the
 repository's current `main` branch. For high-assurance or offline review,
@@ -43,7 +45,8 @@ inspect it, then run `bash install.sh setup`.
 
 `setup` checks Node/OpenCode, installs the bridge after verifying its release
 `SHA256SUMS`, creates `$HOME/projects` if missing, and preserves an existing
-token/config. It never uses the entire home directory as a workdir.
+token/config. It repairs missing command launchers without reinstalling an
+existing bridge. It never uses the entire home directory as a workdir.
 `opencode-mobile` starts OpenCode and the bridge, checks health, and creates a public
 temporary Cloudflare Quick Tunnel after explicit confirmation each run. Once
 ready, it prints the bridge URL and pairing token and displays a QR payload that
@@ -93,8 +96,10 @@ path. Add it to `PATH` or call the launcher directly.
 
 ## Windows
 
-Windows 10 or newer with PowerShell 5.1 or later. `adb` is required only for
-APK installation.
+Windows 10 or newer with PowerShell 5.1 or later. The current PowerShell
+installer installs and verifies the bridge, but does not yet provide the
+Cloudflare quickstart, pairing QR, or the `opencode-mobile` launcher. `adb` is
+required only for optional APK installation.
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
@@ -119,10 +124,14 @@ The Windows installer writes under `%LOCALAPPDATA%\opencode-mobile` and
 
 ## Requirements
 
-- Node.js 20 or newer for the bridge.
+- Node.js 22 or newer for the bridge and installer.
 - `curl` or `wget`, and `tar` on Linux/macOS.
 - `sha256sum` or `shasum`.
 - Android platform tools (`adb`) for APK installation.
+- `cloudflared` for the Linux/macOS temporary public-tunnel pairing flow; the
+  installer can install a checksum-verified binary where supported.
+- `qrencode` for a terminal-rendered QR code. Without it, the bridge URL and
+  token are printed for manual entry.
 - A reachable OpenCode service. The bridge discovers the local service file
   automatically, or you can set `OPENCODE_URL` and `OPENCODE_PASSWORD` in the
   config file.

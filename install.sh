@@ -527,18 +527,15 @@ install_bridge() {
   if [ "$COMMAND" != "update" ] && { [ "$COMMAND" != "setup" ] || { [ -x "$BIN_DIR/opencode-mobile" ] && [ -x "$BIN_DIR/opencode-mobile-bridge" ] && [ -d "$PREFIX/bridge/current" ]; }; } && { [ -d "$PREFIX/bridge/current" ] || { [ "$DRY_RUN" = 1 ] && [ -f "$CONFIG_FILE" ]; }; }; then
     if [ "$DRY_RUN" = 1 ]; then
       info "Existing bridge installation found at $PREFIX/bridge/current"
-      info "Would keep the installed bridge and its configuration"
+      info "Would keep the installed bridge and repair any missing command launchers"
       return 0
     fi
     if [[ "$COMMAND" == setup ]]; then
       # Repair launchers independently: the bridge can already be present while
       # a user removed just the primary command. setup's source must be saved
       # before generating launchers that call the saved installer.
-      if [ ! -x "$BIN_DIR/opencode-mobile-installer" ] || [ ! -x "$PREFIX/installer" ] || [ "$OPENCODE_MOBILE_INSTALLER_SOURCE" != "$BIN_DIR/opencode-mobile-installer" ]; then
+      if [ ! -x "$BIN_DIR/opencode-mobile-installer" ] || [ ! -x "$PREFIX/installer" ]; then
         mkdir -p "$BIN_DIR"
-        persist_installer
-      fi
-      if [ ! -x "$BIN_DIR/opencode-mobile-installer" ]; then
         persist_installer
       fi
       if [ ! -x "$BIN_DIR/opencode-mobile" ]; then
@@ -614,11 +611,14 @@ EOF
     info "Would download and verify the bridge archive"
     info "Would install under $PREFIX/bridge/current"
     info "Would create launcher: $BIN_DIR/opencode-mobile-bridge"
-    create_config
+    if [ "$COMMAND" = setup ]; then
+      info "Would create the opencode-mobile startup command and helper launchers"
+      info "Would create or preserve the private pairing configuration"
+    fi
     info "Dry run complete. No files were changed."
     return 0
   fi
-  if [ "$COMMAND" != "setup" ] || [ ! -x "$BIN_DIR/opencode-mobile-installer" ] || [ ! -x "$PREFIX/installer" ]; then persist_installer; fi
+  persist_installer
 
   case "$(uname -s):$(uname -m)" in
     Linux:x86_64|Linux:aarch64|Linux:arm64|Darwin:x86_64|Darwin:arm64) ;;

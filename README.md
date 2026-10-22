@@ -19,6 +19,12 @@ binaries are attached to that repository's GitHub Releases.
 - Provides `doctor`, `update`, and `uninstall` commands.
 - On Linux/macOS, prints a phone pairing QR, URL, and token on startup (QR
   rendering requires `qrencode`).
+- On Windows, `setup` creates `setup`, `up`, `down`, and `status` launchers;
+  pairing runs in the foreground and is stopped with Ctrl+C.
+
+The application release currently linked by the website and installer is
+`1.0.0-beta.3` (pre-release). It includes the Android APK and bridge/web
+bundles with `SHA256SUMS`. No newer application release is published yet.
 
 The bridge listens on `127.0.0.1:8787` by default. Remote access is expected to
 go through Tailscale or a reverse proxy; see the main repository's deployment
@@ -98,9 +104,10 @@ path. Add it to `PATH` or call the launcher directly.
 
 Windows 10 or newer with PowerShell 5.1 or later. Setup installs and verifies
 the bridge, creates launchers, and generates a protected pairing config. Pairing
-uses a temporary public Cloudflare Quick Tunnel. Install `cloudflared` from its
-official download page before starting; `adb` is required only for optional APK
-installation.
+uses a temporary public Cloudflare Quick Tunnel. Install Node.js 22+ and
+`cloudflared` from its official download page before starting; `adb` is required
+only for optional APK installation. Windows has passed PowerShell parsing and
+dry-run CI checks; a real Windows runtime test is still required.
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass

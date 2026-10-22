@@ -44,9 +44,13 @@ inspect it, then run `bash install.sh setup`.
 `SHA256SUMS`, creates `$HOME/projects` if missing, and preserves an existing
 token/config. It never uses the entire home directory as a workdir.
 `opencode-mobile` starts OpenCode and the bridge, checks health, and creates a public
-temporary Cloudflare Quick Tunnel after explicit confirmation each run.
-Anyone with both URL and token can control the agent. The token and QR payload
-are printed only in the local terminal, never stored in logs. `cloudflared` is
+temporary Cloudflare Quick Tunnel after explicit confirmation each run. Once
+ready, it prints the bridge URL and pairing token and displays a QR payload that
+the app scans to fill both fields automatically. You can also enter the URL and
+token manually. Use `opencode-mobile --copy-pairing` (or `--copy`) to copy the
+QR connection payload if a supported clipboard utility is installed. Anyone
+with both URL and token can control the agent. These credentials are printed
+only in the local terminal, never stored in logs. `cloudflared` is
 downloaded from the official release and checked against its SHA-256 before
 being placed in the user bin directory; no sudo or system package changes are
 needed on supported Linux/macOS architectures. `down`, `status`, `doctor`, and `apk` are also

@@ -6,7 +6,52 @@
 # pairing details only in the foreground terminal.
 set -euo pipefail
 
-INSTALLER_VERSION="0.3.0"
+# Write setup diagnostics to a private local log while keeping the terminal clean.
+INSTALL_LOG="${TMPDIR:-/tmp}/opencode-install.log"
+UI_CURSOR_HIDDEN=0
+exec 3>&1
+ui_restore_cursor() {
+  if (( UI_CURSOR_HIDDEN )); then
+    printf '\033[?25h' >&2
+    UI_CURSOR_HIDDEN=0
+  fi
+}
+ui_hide_cursor() {
+  if [[ -t 1 ]]; then
+    printf '\033[?25l' >&2
+    UI_CURSOR_HIDDEN=1
+  fi
+}
+ui_arrow() { printf '%s→%s %s%s%s\n' "${UI_CYAN:-}" "${UI_RESET:-}" "${UI_WHITE:-}" "$1" "${UI_RESET:-}" >&3; }
+ui_logo() {
+  local version="${INSTALLER_VERSION:-0.3.0}"
+  printf '%s%s  ___  ____  ____\n / _ \/ ___|/ ___|\n| (_) | |   | |___\n \___/|_|    \____|%s\n' "${UI_BOLD:-}" "${UI_CYAN:-}" "${UI_RESET:-}" >&3
+  printf '%sOpenCode Mobile · %s%s\n' "${UI_DIM:-}" "$version" "${UI_RESET:-}" >&3
+}
+
+# When invoked through `bash -s`, stdin is the only copy of the installer.
+if [[ "${1:-}" == setup && "${OPENCODE_MOBILE_STDIN_CAPTURED:-}" != 1 && ( "$0" == bash || "$0" == -bash || ! -f "$0" ) ]]; then
+  UI_STREAM_SOURCE="$(mktemp "${TMPDIR:-/tmp}/opencode-mobile-installer.XXXXXX")"
+  chmod 600 "$UI_STREAM_SOURCE" 2>/dev/null || true
+  cat >"$UI_STREAM_SOURCE"
+  export OPENCODE_MOBILE_INSTALLER_SOURCE="$UI_STREAM_SOURCE"
+  export OPENCODE_MOBILE_STDIN_CAPTURED=1
+  exec bash -c 'source="$1"; shift; export OPENCODE_MOBILE_INSTALLER_SOURCE="$source" OPENCODE_MOBILE_STDIN_CAPTURED=1; source "$source" "$@"' opencode-mobile-stream "$UI_STREAM_SOURCE" "$@" < /dev/null
+fi
+
+if [[ "${OPENCODE_MOBILE_STDIN_CAPTURED:-}" == 1 && "$0" == */opencode-mobile-installer.* ]]; then
+  export OPENCODE_MOBILE_INSTALLER_SOURCE="$0"
+fi
+
+# Keep setup UI colors separate from the installer command's existing colors.
+UI_CYAN= UI_BLUE= UI_GREEN= UI_RED= UI_YELLOW= UI_DIM= UI_WHITE= UI_BOLD= UI_RESET=
+if [[ -t 1 && -z "${NO_COLOR:-}" && "${TERM:-dumb}" != dumb && "${NO_COLOR_FLAG:-0}" == 0 ]]; then
+  UI_CYAN=$'\033[36m'; UI_BLUE=$'\033[34m'; UI_GREEN=$'\033[32m'
+  UI_RED=$'\033[31m'; UI_YELLOW=$'\033[1;33m'; UI_DIM=$'\033[2;37m'
+  UI_WHITE=$'\033[37m'; UI_BOLD=$'\033[1m'; UI_RESET=$'\033[0m'
+fi
+
+INSTALLER_VERSION="0.3.1"
 DEFAULT_REPO="Aetherdz/opencode-mobile"
 DEFAULT_PREFIX="${XDG_DATA_HOME:-$HOME/.local/share}/opencode-mobile"
 DEFAULT_BIN_DIR="$HOME/.local/bin"
@@ -25,6 +70,7 @@ RELEASE_TAG=""
 ADB_SERIAL="${ADB_SERIAL:-}"
 DRY_RUN=0
 YES=0
+COPY_PAIRING=0
 PURGE=0
 NO_COLOR_FLAG=0
 COMMAND="install"
@@ -54,15 +100,24 @@ setup_colors() {
   fi
 }
 
-info() { [ "$QUIET" = 1 ] || printf '%s\n' "${BOLD}›${RESET} $*"; }
-ok() { [ "$QUIET" = 1 ] || printf '%s\n' "${GREEN}✓${RESET} $*"; }
+info() { [ "$QUIET" = 1 ] || { [[ "${UI_MINIMAL:-0}" == 1 ]] || printf '%s\n' "${BOLD}›${RESET} $*"; }; }
+ok() { [ "$QUIET" = 1 ] || { [[ "${UI_MINIMAL:-0}" == 1 ]] || printf '%s\n' "${GREEN}✓${RESET} $*"; }; }
 warn() { [ "$QUIET" = 1 ] || printf '%s\n' "${YELLOW}WARN${RESET} $*" >&2; }
 die() {
   trap - ERR
   printf '%s\n' "${RED}ERROR${RESET} $*" >&2
   exit 1
 }
-step() { [ "$QUIET" = 1 ] || printf '\n%s\n' "${BOLD}$*${RESET}"; }
+step() {
+  [ "$QUIET" = 1 ] && return 0
+  if [[ "${UI_MINIMAL:-0}" == 1 ]]; then
+    case "$*" in
+      *Installing*) ui_arrow Installing ;;
+      *Downloading*) ui_arrow Downloading ;;
+      *Verifying*) ui_arrow Verifying ;;
+    esac
+  else printf '\n%s\n' "${BOLD}$*${RESET}"; fi
+}
 
 stop_children() {
   local pid
@@ -129,6 +184,7 @@ Options:
   --release TAG     Release tag to install. Default: latest release
   --dry-run         Print actions without downloading or writing files.
   --yes             Non-interactive mode (does not bypass public-tunnel consent).
+  --copy-pairing    Copy the temporary connection URL and QR payload to clipboard when supported.
   --no-color        Disable ANSI color.
   --purge           With uninstall, also remove the config and data directory.
   -h, --help        Show this help.
@@ -206,6 +262,9 @@ parse_args() {
         ;;
       --yes)
         YES=1
+        ;;
+      --copy-pairing|--copy)
+        COPY_PAIRING=1
         ;;
       --no-color)
         NO_COLOR_FLAG=1
@@ -291,6 +350,8 @@ download_file() {
   if has_cmd curl; then
     if [ "$QUIET" = 1 ]; then
       curl -fsSL --retry 3 --proto '=https' --tlsv1.2 -o "$dest" "$url"
+    elif [[ "${UI_MINIMAL:-0}" == 1 ]]; then
+      curl -fsSL --retry 3 --proto '=https' --tlsv1.2 -o "$dest" "$url" >/dev/null 2>&1
     else
       curl -fL --retry 3 --proto '=https' --tlsv1.2 --progress-bar -o "$dest" "$url"
     fi
@@ -364,7 +425,7 @@ prepare_workdir() {
   esac
   [ "$WORKDIR" != "$HOME" ] || die "Refusing to allow the entire home directory; select a projects folder"
   if [ "$DRY_RUN" = 1 ]; then
-    info "Would ensure workdir exists: $WORKDIR"
+    if [[ "${UI_MINIMAL:-0}" != 1 ]]; then info "Would ensure workdir exists: $WORKDIR"; fi
     return 0
   fi
   mkdir -p "$WORKDIR"
@@ -452,12 +513,12 @@ select_workdir() {
   local suggested
   suggested="$HOME/projects"
   WORKDIR="$suggested"
-    info "Using project directory: $WORKDIR (override with --workdir /path)"
+  if [[ "${UI_MINIMAL:-0}" != 1 ]]; then info "Using project directory: $WORKDIR (override with --workdir /path)"; fi
   prepare_workdir
 }
 
 install_bridge() {
-  step "Installing the bridge"
+  if [[ "${UI_MINIMAL:-0}" == 1 ]]; then step "Installing"; else step "Installing the bridge"; fi
   check_node
   require_sha_tool
   select_workdir
@@ -469,11 +530,12 @@ install_bridge() {
       info "Would keep the installed bridge and its configuration"
       return 0
     fi
-    ok "Keeping the existing bridge installation"
+    if [[ "${UI_MINIMAL:-0}" != 1 ]]; then ok "Keeping the existing bridge installation"; fi
+    if [[ "${UI_MINIMAL:-0}" == 1 ]]; then persist_installer; fi
     return 0
   fi
   if [ -d "$PREFIX/bridge/current" ] && { [ ! -x "$BIN_DIR/opencode-mobile" ] || [ ! -x "$BIN_DIR/opencode-mobile-bridge" ]; }; then
-    info "Existing bridge archive found; repairing launchers without replacing configuration."
+    if [[ "${UI_MINIMAL:-0}" != 1 ]]; then info "Existing bridge archive found; repairing launchers without replacing configuration."; fi
     mkdir -p "$BIN_DIR"
     local launcher="$BIN_DIR/opencode-mobile-bridge"
     cat > "$launcher" <<EOF
@@ -488,11 +550,9 @@ exec node "$PREFIX/bridge/current/dist/index.js" "\$@"
 EOF
     chmod 755 "$launcher"
     local installer_copy="$BIN_DIR/opencode-mobile-installer"
-    cp "$0" "$installer_copy"; chmod 755 "$installer_copy"
-    cp "$0" "$PREFIX/installer"; chmod 755 "$PREFIX/installer"
-    for local_cmd in opencode-mobile opencode-mobile-up opencode-mobile-down opencode-mobile-apk; do
+    persist_installer
+    for local_cmd in opencode-mobile-up opencode-mobile-down opencode-mobile-apk; do
       local subcommand="${local_cmd#opencode-mobile-}"
-      [ "$local_cmd" = opencode-mobile ] && subcommand=""
       cat > "$BIN_DIR/$local_cmd" <<EOF
 #!/usr/bin/env sh
 set -eu
@@ -500,6 +560,12 @@ exec "$installer_copy" $subcommand "\$@"
 EOF
       chmod 755 "$BIN_DIR/$local_cmd"
     done
+    cat > "$BIN_DIR/opencode-mobile" <<EOF
+#!/usr/bin/env sh
+set -eu
+exec "$installer_copy" up "\$@"
+EOF
+    chmod 755 "$BIN_DIR/opencode-mobile"
     return 0
   fi
 
@@ -525,8 +591,7 @@ EOF
   local asset="opencode-mobile-bridge-${VERSION_NUM}.tar.gz"
   local url
   url="$(release_url "$asset")"
-  info "Release: $TAG"
-  info "Asset: $asset"
+  if [[ "${UI_MINIMAL:-0}" != 1 ]]; then info "Release: $TAG"; info "Asset: $asset"; fi
 
   [ -n "$TMP_DIR" ] || TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/opencode-mobile.XXXXXX")"
   local archive="$TMP_DIR/$asset"
@@ -538,7 +603,7 @@ EOF
   [ -n "$expected" ] || die "SHA256SUMS does not list $asset"
   actual="$(sha256_of "$archive")"
   [ "$expected" = "$actual" ] || die "Checksum mismatch for $asset"
-  ok "Checksum verified"
+  if [[ "${UI_MINIMAL:-0}" == 1 ]]; then step "Verifying"; else ok "Checksum verified"; fi
 
   mkdir -p "$TMP_DIR/unpack"
   tar -xzf "$archive" -C "$TMP_DIR/unpack"
@@ -558,7 +623,7 @@ EOF
   rm -rf "$dest"
   cp -a "$src" "$dest"
   ln -sfn "$VERSION_NUM" "$PREFIX/bridge/current"
-  ok "Bridge installed at $dest"
+  if [[ "${UI_MINIMAL:-0}" != 1 ]]; then ok "Bridge installed at $dest"; fi
 
   mkdir -p "$BIN_DIR"
   local launcher="$BIN_DIR/opencode-mobile-bridge"
@@ -576,11 +641,16 @@ set +a
 exec node "$PREFIX/bridge/current/dist/index.js" "\$@"
 EOF
   chmod 755 "$launcher"
-  ok "Launcher: $launcher"
+  if [[ "${UI_MINIMAL:-0}" != 1 ]]; then ok "Launcher: $launcher"; fi
 
   mkdir -p "$BIN_DIR"
   local installer_copy="$BIN_DIR/opencode-mobile-installer"
-  if [ -f "$0" ] && [ -r "$0" ]; then
+  if [[ -n "${OPENCODE_MOBILE_INSTALLER_SOURCE:-}" && "$OPENCODE_MOBILE_INSTALLER_SOURCE" != "$installer_copy" ]] && [ -f "$OPENCODE_MOBILE_INSTALLER_SOURCE" ] && [ -r "$OPENCODE_MOBILE_INSTALLER_SOURCE" ]; then
+    cp "$OPENCODE_MOBILE_INSTALLER_SOURCE" "$installer_copy"
+    chmod 755 "$installer_copy"
+    cp "$OPENCODE_MOBILE_INSTALLER_SOURCE" "$PREFIX/installer"
+    chmod 755 "$PREFIX/installer"
+  elif [ -f "$0" ] && [ -r "$0" ]; then
     cp "$0" "$installer_copy"
     chmod 755 "$installer_copy"
     cp "$0" "$PREFIX/installer"
@@ -601,10 +671,7 @@ EOF
   cat > "$BIN_DIR/opencode-mobile" <<EOF
 #!/usr/bin/env sh
 set -eu
-if [ "\$#" -eq 0 ]; then
-  exec "$BIN_DIR/opencode-mobile-installer" up
-fi
-exec "$BIN_DIR/opencode-mobile-installer" "\$@"
+exec "$BIN_DIR/opencode-mobile-installer" up "\$@"
 EOF
   chmod 755 "$BIN_DIR/opencode-mobile"
   local apk_launcher="$BIN_DIR/opencode-mobile-apk"
@@ -625,13 +692,14 @@ EOF
   mkdir -p "$DATA_DIR"
   chmod 700 "$DATA_DIR" 2>/dev/null || true
   create_config
-
   case ":$PATH:" in
     *":$BIN_DIR:"*) ;;
     *) warn "$BIN_DIR is not in PATH. Add it or run $launcher directly." ;;
   esac
-  ok "Start the app with: opencode-mobile"
-  ok "Management: opencode-mobile down | status | doctor | apk"
+  if [[ "${UI_MINIMAL:-0}" != 1 ]]; then
+    ok "Start the app with: opencode-mobile"
+    ok "Management: opencode-mobile down | status | doctor | apk"
+  fi
 }
 
 install_apk() {
@@ -666,7 +734,7 @@ install_apk() {
   [ "$expected" = "$actual" ] || die "Checksum mismatch for $asset"
   ok "Checksum verified"
 
-  printf '\nLatest Android APK (arm64-v8a only):\n  URL:    %s\n  SHA256: %s\n' "$url" "$expected"
+  if [[ "${UI_MINIMAL:-0}" != 1 ]]; then printf '\nLatest Android APK (arm64-v8a only):\n  URL:    %s\n  SHA256: %s\n' "$url" "$expected"; fi
   if [ "${INSTALL_APK_WITH_ADB:-0}" = 1 ]; then
     [ "$YES" = 0 ] || die "ADB installation cannot be approved non-interactively; run without --yes and confirm on the terminal."
     need_cmd adb
@@ -768,22 +836,39 @@ quickstart() {
     info "Would install and verify the bridge release"
     info "Would prepare a private mode-600 config and local pairing token"
     info "Would start OpenCode and bridge, create a public temporary Quick Tunnel after explicit consent"
-    info "Would display a QR when qrencode is present and always print URL plus token locally"
+    info "Would print the connection URL/token and render a scannable QR when qrencode is available"
+    [ "$COPY_PAIRING" = 1 ] && info "Would try to copy the QR connection payload to a supported clipboard"
     return 0
   fi
 
   QUIET=1
+  if [[ "${UI_MINIMAL:-0}" == 1 ]]; then QUIET=0; fi
   install_bridge
   QUIET=0
   [ -t 0 ] || die "up requires a terminal to show the local pairing details."
-  printf 'WARNING: this creates a public temporary URL. Anyone with the URL and token can control the agent, which may allow shell-level actions on the allowed project folders. The URL is not saved and changes on restart. Continue? [y/N] '
+  if [[ "${UI_MINIMAL:-0}" == 1 ]]; then
+    printf '%sPublic temporary link: URL + code allow agent control. Continue? [y/N] ' "$UI_YELLOW"
+  else
+    printf 'WARNING: this creates a public temporary URL. Anyone with URL and token can control the agent. Continue? [y/N] '
+  fi
   local answer
   read -r answer || answer=""
-  case "$answer" in y|Y|yes|YES) ;; *) die "No changes made." ;; esac
+  case "$answer" in
+    y|Y|yes|YES) ;;
+    *)
+      if [[ "${UI_MINIMAL:-0}" == 1 ]]; then ui_restore_cursor; fi
+      die "No changes made."
+      ;;
+  esac
   if ! has_cmd cloudflared; then
-    printf 'cloudflared is missing. Download the official binary, verify its SHA-256, and install it under %s (no sudo)? [Y/n] ' "$BIN_DIR"
+    if [[ "${UI_MINIMAL:-0}" == 1 ]]; then printf 'Download verified cloudflared to your user bin? [Y/n] '; else printf 'cloudflared is missing. Download the official binary, verify its SHA-256, and install it under %s (no sudo)? [Y/n] ' "$BIN_DIR"; fi
     read -r answer || answer=""
-    case "$answer" in n|N|no|NO) die "Cancelled. Install cloudflared manually, then run opencode-mobile." ;; esac
+    case "$answer" in
+      n|N|no|NO)
+        if [[ "${UI_MINIMAL:-0}" == 1 ]]; then ui_restore_cursor; fi
+        die "Cancelled. Install cloudflared manually, then run opencode-mobile."
+        ;;
+    esac
     install_cloudflared
   fi
   case ":$PATH:" in
@@ -795,9 +880,9 @@ quickstart() {
   acquire_lock
   trap 'stop_children; release_lock; cleanup' EXIT
   trap 'exit 130' INT TERM
-  printf 'Starting OpenCode…\n'
+  if [[ "${UI_MINIMAL:-0}" == 1 ]]; then ui_arrow "Starting OpenCode"; else printf 'Starting OpenCode…\n'; fi
   start_opencode_service
-  printf 'Starting bridge…\n'
+  if [[ "${UI_MINIMAL:-0}" == 1 ]]; then ui_arrow "Starting bridge"; else printf 'Starting bridge…\n'; fi
 
   local port host token bridge_log tunnel_log tunnel_url connect_url
   port="$(awk -F= '$1 == "PORT" { value=$2 } END { print value }' "$CONFIG_FILE")"
@@ -868,19 +953,43 @@ quickstart() {
   # untrusted config text in the privileged launcher process.
   token="$(awk -F= '$1 == "AUTH_TOKEN" { value=substr($0, index($0, "=") + 1); gsub(/^\"|\"$/, "", value) } END { print value }' "$CONFIG_FILE")"
   [ "${#token}" -ge 32 ] || die "Could not read a valid pairing token from $CONFIG_FILE"
-  printf '\nOpenCode Mobile is ready\n'
-  printf '  Bridge:  %s\n' "$connect_url"
-  printf '  Token:   %s\n' "$token"
+  printf '\n%sOpenCode Mobile is ready%s\n' "$UI_GREEN" "$UI_RESET" >&3
+  printf '  Bridge URL: %s\n' "$connect_url" >&3
+  printf '  Pairing token: %s\n' "$token" >&3
+  printf '  QR payload: scanned by OpenCode Mobile to fill URL and token.\n' >&3
   local qr_payload
   qr_payload="$(node -e 'const u=new URL("opencode-mobile://connect");u.searchParams.set("url",process.argv[1]);u.searchParams.set("token",process.argv[2]);process.stdout.write(u.toString())' "$connect_url" "$token")"
-  qr_output "$qr_payload"
-  if ! has_cmd qrencode; then
-    printf '  QR unavailable: install qrencode (or enable it in the installer) to render the code here.\n'
+  if [[ "${UI_MINIMAL:-0}" == 1 ]]; then
+    printf '\nScan this code in OpenCode Mobile:\n' >&3
+    if has_cmd qrencode; then
+      printf '%s' "$qr_payload" | qrencode -t ANSIUTF8 >&3 2>/dev/null || printf '  Could not render QR; enter the URL and pairing token manually.\n' >&3
+    else
+      printf '  QR unavailable: install qrencode; enter the URL and pairing token shown above manually.\n' >&3
+    fi
+  else
+    printf '\nScan this code in OpenCode Mobile:\n' >&3
+    qr_output "$qr_payload" >&3
+    if ! has_cmd qrencode; then printf '  QR unavailable: install qrencode; URL and token above can be entered manually.\n' >&3; fi
+  fi
+  if [ "$COPY_PAIRING" = 1 ]; then
+    if has_cmd termux-clipboard-set; then
+      printf '%s' "$qr_payload" | termux-clipboard-set && printf '  QR connection data copied to clipboard.\n' >&3
+    elif has_cmd pbcopy; then
+      printf '%s' "$qr_payload" | pbcopy && printf '  QR connection data copied to clipboard.\n' >&3
+    elif has_cmd xclip; then
+      printf '%s' "$qr_payload" | xclip -selection clipboard && printf '  QR connection data copied to clipboard.\n' >&3
+    elif has_cmd wl-copy; then
+      printf '%s' "$qr_payload" | wl-copy && printf '  QR connection data copied to clipboard.\n' >&3
+    else
+      printf '  Clipboard unavailable: install wl-clipboard, xclip, pbcopy, or termux-api.\n' >&3
+    fi
   fi
   unset qr_payload
   unset token
-  printf 'Scan QR or enter URL and token manually. Keep this terminal open; Ctrl+C stops the managed bridge/session.\n'
-  if [ -n "$tunnel_url" ]; then printf 'This public temporary URL is not saved and expires when stopped.\n'; fi
+  if [[ "${UI_MINIMAL:-0}" != 1 ]]; then
+    printf 'Scan QR or enter URL and token manually. Keep this terminal open; Ctrl+C stops the managed bridge/session.\n'
+    if [ -n "$tunnel_url" ]; then printf 'This public temporary URL is not saved and expires when stopped.\n'; fi
+  fi
 
   wait "$TUNNEL_PID" || die "Cloudflare Tunnel stopped unexpectedly."
   die "Cloudflare Tunnel stopped unexpectedly."
@@ -978,6 +1087,11 @@ do_setup() {
   install_bridge
   if [ "$DRY_RUN" = 1 ]; then
     info "Dry run complete; no installation was performed."
+  elif [[ "${UI_MINIMAL:-0}" == 1 ]]; then
+    ui_restore_cursor
+    printf '%s→ Installed successfully%s\n' "$UI_GREEN" "$UI_RESET" >&3
+    printf '%sRun this to start: %sopencode-mobile%s\n' "$UI_DIM" "$UI_YELLOW" "$UI_RESET" >&3
+    UI_CURSOR_HIDDEN=0
   else
     printf '\nSetup complete. Run: opencode-mobile\n'
   fi
@@ -985,13 +1099,16 @@ do_setup() {
 
 persist_installer() {
   local source="${OPENCODE_MOBILE_INSTALLER_SOURCE:-}"
-  [ -n "$source" ] || return 0
+  [ -n "$source" ] || source="$0"
+  if [[ "$source" == "$BIN_DIR/opencode-mobile-installer" ]]; then return 0; fi
   [ -r "$source" ] || die "Installer source is no longer readable: $source"
-  mkdir -p "$BIN_DIR" "$PREFIX"
-  cp "$source" "$BIN_DIR/opencode-mobile-installer"
-  chmod 755 "$BIN_DIR/opencode-mobile-installer"
-  cp "$source" "$PREFIX/installer"
-  chmod 755 "$PREFIX/installer"
+  if [[ "$source" != "$BIN_DIR/opencode-mobile-installer" ]]; then
+    mkdir -p "$BIN_DIR" "$PREFIX"
+    cp "$source" "$BIN_DIR/opencode-mobile-installer"
+    chmod 755 "$BIN_DIR/opencode-mobile-installer"
+    cp "$source" "$PREFIX/installer"
+    chmod 755 "$PREFIX/installer"
+  fi
 }
 
 doctor() {
@@ -1118,23 +1235,24 @@ uninstall_all() {
 main() {
   setup_colors
   parse_args "$@"
+  if [[ "$COMMAND" == setup ]]; then
+    INSTALL_LOG="${TMPDIR:-/tmp}/opencode-install.log"
+    : >"$INSTALL_LOG" 2>/dev/null || true
+    UI_MINIMAL=1
+    NO_COLOR_FLAG=1
+    exec > >(tee -a "$INSTALL_LOG" >/dev/null) 2>&1
+    ui_hide_cursor
+    ui_logo
+    ui_arrow Downloading
+    trap 'rc=$?; ui_restore_cursor; if (( rc != 0 )); then printf "%s→ Failed: setup failed%s\nFull log: %s\n" "$UI_RED" "$UI_RESET" "$INSTALL_LOG" >&3; fi; exit "$rc"' EXIT
+  elif [[ "${UI_MINIMAL:-0}" == 1 ]]; then
+    ui_logo
+  fi
 
   case "$COMMAND" in
     setup)
-      if [ -f "$0" ] && [ -r "$0" ]; then
-        export OPENCODE_MOBILE_INSTALLER_SOURCE="$0"
-      elif [ -r /dev/stdin ]; then
-        OPENCODE_MOBILE_STREAM_TMP="$(mktemp "${TMPDIR:-/tmp}/opencode-mobile-installer.XXXXXX")"
-        chmod 600 "$OPENCODE_MOBILE_STREAM_TMP"
-        export OPENCODE_MOBILE_INSTALLER_SOURCE="$OPENCODE_MOBILE_STREAM_TMP"
-        cat /dev/stdin > "$OPENCODE_MOBILE_STREAM_TMP"
-      else
-        die "Cannot read installer source. Run using the saved install.sh file."
-      fi
-      trap 'if [ -n "${OPENCODE_MOBILE_STREAM_TMP:-}" ]; then rm -f "$OPENCODE_MOBILE_STREAM_TMP"; fi' EXIT
+      if [[ -z "${OPENCODE_MOBILE_INSTALLER_SOURCE:-}" && -f "$0" && -r "$0" ]]; then export OPENCODE_MOBILE_INSTALLER_SOURCE="$0"; fi
       do_setup
-      if [ -n "${OPENCODE_MOBILE_STREAM_TMP:-}" ]; then rm -f "$OPENCODE_MOBILE_STREAM_TMP"; unset OPENCODE_MOBILE_STREAM_TMP; fi
-      trap cleanup EXIT
       ;;
     quickstart)
       quickstart

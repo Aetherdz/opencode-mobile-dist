@@ -87,7 +87,13 @@ test -x "$BIN_DIR/opencode-mobile-up"
 grep -q 'opencode-mobile-installer" up' "$BIN_DIR/opencode-mobile"
 cmp "$INSTALLER_COPY" "$BIN_DIR/opencode-mobile-installer"
 output="$("$ROOT_DIR/install.sh" setup --prefix "$PREFIX" --bin-dir "$BIN_DIR" --workdir "$WORKDIR" --no-color)"
-printf '%s\n' "$output" | grep -q 'Setup complete. Run: opencode-mobile'
+printf '%s\n' "$output" | grep -q 'Installed successfully'
+printf '%s\n' "$output" | grep -q 'Run this to start:'
+printf '%s\n' "$output" | grep -q '→ Installing'
+if printf '%s\n' "$output" | grep -Eq 'Release:|Checksum verified|WARN|ERROR'; then
+  echo "setup output contains verbose diagnostics" >&2
+  exit 1
+fi
 printf 'fake node\n' > "$FAKE_BIN/node"
 cat > "$FAKE_BIN/node" <<'EOF'
 #!/usr/bin/env bash
@@ -106,8 +112,12 @@ STREAM_DATA="$WORK/stream-data"
 mkdir -p "$STREAM_BIN" "$STREAM_PREFIX" "$STREAM_CONFIG" "$STREAM_DATA"
 export XDG_CONFIG_HOME="$STREAM_CONFIG" XDG_DATA_HOME="$STREAM_DATA"
 cat "$ROOT_DIR/install.sh" | "$ROOT_DIR/install.sh" setup --prefix "$STREAM_PREFIX" --bin-dir "$STREAM_BIN" --workdir "$WORKDIR" --no-color > "$WORK/stream-output"
-grep -q 'Setup complete. Run: opencode-mobile' "$WORK/stream-output"
+grep -q 'Installed successfully' "$WORK/stream-output"
+grep -q 'opencode-mobile' "$WORK/stream-output"
+grep -q '→ Downloading' "$WORK/stream-output"
 test -x "$STREAM_BIN/opencode-mobile-installer"
+test -x "$STREAM_BIN/opencode-mobile"
+grep -q 'opencode-mobile-installer" up' "$STREAM_BIN/opencode-mobile"
 cmp "$ROOT_DIR/install.sh" "$STREAM_BIN/opencode-mobile-installer"
 test ! -e "$WORK"/opencode-mobile-installer.*
 export XDG_CONFIG_HOME="$CONFIG_HOME" XDG_DATA_HOME="$DATA_HOME"
@@ -121,6 +131,8 @@ after="$(awk -F= '/^AUTH_TOKEN=/{print $2}' "$CONFIG_HOME/opencode-mobile/bridge
 test "$before" = "$after"
 "$ROOT_DIR/install.sh" quickstart --dry-run --yes --workdir "$WORKDIR" --prefix "$PREFIX" --bin-dir "$BIN_DIR" --no-color
 "$ROOT_DIR/install.sh" up --dry-run --yes --workdir "$WORKDIR" --prefix "$PREFIX" --bin-dir "$BIN_DIR" --no-color
+"$ROOT_DIR/install.sh" up --dry-run --copy-pairing --workdir "$WORKDIR" --prefix "$PREFIX" --bin-dir "$BIN_DIR" --no-color
+"$ROOT_DIR/install.sh" version --no-color | grep -q '0.3.1'
 "$ROOT_DIR/install.sh" status --prefix "$PREFIX" --bin-dir "$BIN_DIR" --no-color | grep -q 'stopped'
 if "$ROOT_DIR/install.sh" install --workdir "$HOME" --prefix "$WORKDIR/prefix" --bin-dir "$WORKDIR/bin" --no-color >/dev/null 2>&1; then
   echo "expected refusal of home directory as workdir" >&2

@@ -760,7 +760,7 @@ function Start-MobileSession {
     $aclOutput = & icacls $configPath
     $aclText = $aclOutput -join "`n"
     $usernameEscaped = [regex]::Escape($env:USERNAME)
-    $hasUserAce = $aclText -match "(?m)^\s+$usernameEscaped:\(R,W\)" -or $aclText -match "(?m)^\s+$usernameEscaped:\(OI\)\(CI\)F"
+    $hasUserAce = $aclText -match "(?m)^\s+${usernameEscaped}:\(R,W\)" -or $aclText -match "(?m)^\s+${usernameEscaped}:\(OI\)\(CI\)F"
     $hasOtherUserAce = $aclText -match '(?m)^\s+(Everyone|Users|Authenticated Users|BUILTIN\\Users):'
     if (($fileAclExit -ne 0) -or ($LASTEXITCODE -ne 0) -or (-not $hasUserAce) -or $hasOtherUserAce) {
         Die "Pairing config ACL is not verifiably restricted to the current user; rerun setup or repair permissions"

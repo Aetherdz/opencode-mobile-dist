@@ -74,6 +74,7 @@ COPY_PAIRING=0
 PURGE=0
 NO_COLOR_FLAG=0
 COMMAND="install"
+SETUP_COMMAND=0
 TARGET_BRIDGE=1
 TARGET_APK=0
 SHOW_VERSION=0
@@ -453,7 +454,7 @@ create_config() {
       [ -n "$WORKDIR" ] || die "Existing config has no ALLOWED_WORKDIRS; rerun setup with --workdir /path/to/projects."
       printf '\nALLOWED_WORKDIRS="%s"\n' "$WORKDIR" >> "$CONFIG_FILE"
     fi
-    if [ "$COMMAND" = "setup" ] && { [ ! -x "$BIN_DIR/opencode-mobile" ] || [ ! -x "$BIN_DIR/opencode-mobile-bridge" ] || [ ! -d "$PREFIX/bridge/current" ]; }; then
+    if [ "$SETUP_COMMAND" = 1 ] && { [ ! -x "$BIN_DIR/opencode-mobile" ] || [ ! -x "$BIN_DIR/opencode-mobile-bridge" ] || [ ! -d "$PREFIX/bridge/current" ]; }; then
       info "Existing secure config found; completing bridge and command installation."
     fi
     if [ "$DRY_RUN" = 1 ]; then
@@ -462,7 +463,7 @@ create_config() {
     fi
     chmod 600 "$CONFIG_FILE" 2>/dev/null || true
     ok "Keeping existing config: $CONFIG_FILE"
-    if { [ "$COMMAND" != "update" ] && [ "$COMMAND" != "setup" ]; } || { [ "$COMMAND" = "setup" ] && [ -x "$BIN_DIR/opencode-mobile" ] && [ -x "$BIN_DIR/opencode-mobile-bridge" ] && [ -d "$PREFIX/bridge/current" ]; }; then
+    if { [ "$COMMAND" != "update" ] && [ "$SETUP_COMMAND" = 0 ]; } || { [ "$SETUP_COMMAND" = 1 ] && [ -x "$BIN_DIR/opencode-mobile" ] && [ -x "$BIN_DIR/opencode-mobile-bridge" ] && [ -d "$PREFIX/bridge/current" ]; }; then
       return 0
     fi
   fi
@@ -524,27 +525,33 @@ install_bridge() {
   select_workdir
   if [ -f "$CONFIG_FILE" ] && [ "$DRY_RUN" != 1 ]; then chmod 600 "$CONFIG_FILE" 2>/dev/null || true; fi
 
-  if [ "$COMMAND" != "update" ] && { [ "$COMMAND" != "setup" ] || { [ -x "$BIN_DIR/opencode-mobile" ] && [ -x "$BIN_DIR/opencode-mobile-bridge" ] && [ -d "$PREFIX/bridge/current" ]; }; } && { [ -d "$PREFIX/bridge/current" ] || { [ "$DRY_RUN" = 1 ] && [ -f "$CONFIG_FILE" ]; }; }; then
+  if [ "$COMMAND" != "update" ] && { [ "$SETUP_COMMAND" = 0 ] || { [ -x "$BIN_DIR/opencode-mobile" ] && [ -x "$BIN_DIR/opencode-mobile-bridge" ] && [ -d "$PREFIX/bridge/current" ]; }; } && { [ -d "$PREFIX/bridge/current" ] || { [ "$DRY_RUN" = 1 ] && [ -f "$CONFIG_FILE" ]; }; }; then
     if [ "$DRY_RUN" = 1 ]; then
-      info "Existing bridge installation found at $PREFIX/bridge/current"
-      info "Would keep the installed bridge and repair any missing command launchers"
+      if [ "$SETUP_COMMAND" = 1 ]; then
+        info "Would keep the installed bridge and repair any missing command launchers"
+      else
+        info "Existing bridge installation found at $PREFIX/bridge/current"
+        info "Would keep the installed bridge and its configuration"
+      fi
       return 0
     fi
-    if [[ "$COMMAND" == setup ]]; then
+    if [ "$SETUP_COMMAND" = 1 ]; then
       # Repair launchers independently: the bridge can already be present while
       # a user removed just the primary command. setup's source must be saved
       # before generating launchers that call the saved installer.
-      if [ ! -x "$BIN_DIR/opencode-mobile-installer" ] || [ ! -x "$PREFIX/installer" ]; then
+      if [ ! -x "$BIN_DIR/opencode-mobile" ]; then
         mkdir -p "$BIN_DIR"
         persist_installer
-      fi
-      if [ ! -x "$BIN_DIR/opencode-mobile" ]; then
         cat > "$BIN_DIR/opencode-mobile" <<EOF
 #!/usr/bin/env sh
 set -eu
 exec "$BIN_DIR/opencode-mobile-installer" up "\$@"
 EOF
         chmod 755 "$BIN_DIR/opencode-mobile"
+      fi
+      if [ ! -x "$BIN_DIR/opencode-mobile-installer" ] || [ ! -x "$PREFIX/installer" ]; then
+        mkdir -p "$BIN_DIR"
+        persist_installer
       fi
       if [ ! -x "$BIN_DIR/opencode-mobile-bridge" ]; then
         mkdir -p "$BIN_DIR"
@@ -611,7 +618,7 @@ EOF
     info "Would download and verify the bridge archive"
     info "Would install under $PREFIX/bridge/current"
     info "Would create launcher: $BIN_DIR/opencode-mobile-bridge"
-    if [ "$COMMAND" = setup ]; then
+    if [ "$SETUP_COMMAND" = 1 ]; then
       info "Would create the opencode-mobile startup command and helper launchers"
       info "Would create or preserve the private pairing configuration"
     fi
@@ -1293,6 +1300,7 @@ main() {
   case "$COMMAND" in
     setup)
       if [[ -z "${OPENCODE_MOBILE_INSTALLER_SOURCE:-}" && -f "$0" && -r "$0" ]]; then export OPENCODE_MOBILE_INSTALLER_SOURCE="$0"; fi
+      SETUP_COMMAND=1
       do_setup
       ;;
     quickstart)

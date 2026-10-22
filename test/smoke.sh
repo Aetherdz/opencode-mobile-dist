@@ -45,7 +45,11 @@ while [ "$#" -gt 0 ]; do
 done
 case "$url" in
   https://api.github.com/*)
-    printf '%s\n' '{"tag_name":"v1.0.0-beta.1"}'
+    if [[ "$url" == *"/releases/latest" ]]; then
+      printf '%s\n' '{"tag_name":"v1.0.0-beta.1"}'
+    else
+      printf '%s\n' '{"tag_name":"1.0.0"}'
+    fi
     ;;
   https://github.com/*/releases/download/*/*)
     asset="${url##*/}"
@@ -71,8 +75,30 @@ test -x "$BIN_DIR/opencode-mobile-bridge"
 test -f "$CONFIG_HOME/opencode-mobile/bridge.env"
 test "$(stat -c '%a' "$CONFIG_HOME/opencode-mobile/bridge.env")" = "600"
 test "$(awk -F= '/^AUTH_TOKEN=/{print length($2)}' "$CONFIG_HOME/opencode-mobile/bridge.env")" -ge 32
+test -x "$BIN_DIR/opencode-mobile-installer"
+test -x "$PREFIX/installer"
+test -x "$BIN_DIR/opencode-mobile"
+test -x "$BIN_DIR/opencode-mobile-down"
+test -x "$BIN_DIR/opencode-mobile-apk"
 
 "$ROOT_DIR/install.sh" doctor --prefix "$PREFIX" --bin-dir "$BIN_DIR" --no-color
+"$ROOT_DIR/install.sh" status --prefix "$PREFIX" --bin-dir "$BIN_DIR" --no-color
+before="$(awk -F= '/^AUTH_TOKEN=/{print $2}' "$CONFIG_HOME/opencode-mobile/bridge.env")"
+chmod 644 "$CONFIG_HOME/opencode-mobile/bridge.env"
+"$ROOT_DIR/install.sh" setup --workdir "$WORKDIR" --prefix "$PREFIX" --bin-dir "$BIN_DIR" --no-color
+test "$(stat -c '%a' "$CONFIG_HOME/opencode-mobile/bridge.env")" = "600"
+after="$(awk -F= '/^AUTH_TOKEN=/{print $2}' "$CONFIG_HOME/opencode-mobile/bridge.env")"
+test "$before" = "$after"
+"$ROOT_DIR/install.sh" quickstart --dry-run --yes --workdir "$WORKDIR" --prefix "$PREFIX" --bin-dir "$BIN_DIR" --no-color
+"$ROOT_DIR/install.sh" up --dry-run --yes --workdir "$WORKDIR" --prefix "$PREFIX" --bin-dir "$BIN_DIR" --no-color
+if "$ROOT_DIR/install.sh" install --workdir "$HOME" --prefix "$WORKDIR/prefix" --bin-dir "$WORKDIR/bin" --no-color >/dev/null 2>&1; then
+  echo "expected refusal of home directory as workdir" >&2
+  exit 1
+fi
+before="$(awk -F= '/^AUTH_TOKEN=/{print $2}' "$CONFIG_HOME/opencode-mobile/bridge.env")"
+"$ROOT_DIR/install.sh" install --prefix "$PREFIX" --bin-dir "$BIN_DIR" --workdir "$WORKDIR" --no-color >/dev/null
+after="$(awk -F= '/^AUTH_TOKEN=/{print $2}' "$CONFIG_HOME/opencode-mobile/bridge.env")"
+test "$before" = "$after"
 "$ROOT_DIR/install.sh" uninstall --prefix "$PREFIX" --bin-dir "$BIN_DIR" --purge --no-color
 
 test ! -e "$PREFIX/bridge"

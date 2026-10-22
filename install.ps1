@@ -29,7 +29,7 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$script:InstallerVersion = "0.1.0"
+$script:InstallerVersion = "0.2.0"
 $script:PackageId = "com.aetherdz.opencodemobile"
 $script:NoColorOutput = [bool]$NoColor
 $script:Prefix = ""
@@ -160,7 +160,7 @@ Options:
   -DryRun          Print actions without downloading or writing files.
   -NoColor         Disable colored output.
   -Purge           With uninstall, remove config and data too.
-  -Yes             Accepted for non-interactive use.
+  -Yes             Accepted for non-interactive use; does not create a public tunnel.
 
 Examples:
   .\install.ps1 -Command install -WorkDir "$env:USERPROFILE\code"

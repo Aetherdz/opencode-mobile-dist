@@ -11,7 +11,7 @@ binaries are attached to that repository's GitHub Releases.
 
 - Installs the authenticated bridge into a versioned directory.
 - Generates a random `AUTH_TOKEN` locally and writes it to a private config
-  file. The token is never printed.
+  file. The token is shown only during `up` in the local terminal.
 - Creates a launcher in your user `bin` directory.
 - Optionally downloads and installs the Android APK through `adb`.
 - Verifies every downloaded asset against the release `SHA256SUMS`.
@@ -21,31 +21,49 @@ The bridge listens on `127.0.0.1:8787` by default. Remote access is expected to
 go through Tailscale or a reverse proxy; see the main repository's deployment
 guide.
 
-## Linux and macOS
+## Linux and macOS quick setup
 
-Inspect the script before running it:
-
-```bash
-curl -fsSLO https://raw.githubusercontent.com/Aetherdz/opencode-mobile-dist/main/install.sh
-less install.sh
-bash install.sh install --workdir "$HOME/projects"
-```
-
-Or run from a clone:
+Review the script and install from a local copy. For stronger pinning, download
+from a reviewed commit URL and verify that commit's published SHA-256 before
+execution. The website's one-line bootstrap is convenient but trusts `main`.
 
 ```bash
 git clone https://github.com/Aetherdz/opencode-mobile-dist.git
 cd opencode-mobile-dist
-./install.sh install --workdir "$HOME/projects"
+less install.sh
+bash install.sh setup --workdir "$HOME/projects"
+opencode-mobile up
 ```
+
+If you bootstrap directly from GitHub Pages, download the installer to disk,
+review it with `less`, and only then execute it. Do not use `curl | bash` for
+unreviewed or unpinned code. For stronger provenance, fetch a reviewed commit
+URL and verify a SHA-256 published through a separately trusted channel.
+
+`setup` checks Node/OpenCode, installs the bridge after verifying its release
+`SHA256SUMS`, prompts for a specific project directory, and preserves an
+existing token/config. It never uses the entire home directory by default.
+`up` starts OpenCode and the bridge, checks health, then offers private
+Tailscale Serve or a public temporary Cloudflare Quick Tunnel. The public mode
+requires explicit confirmation every time; anyone with both URL and token can
+control the agent. The token and QR payload are printed only in the local
+terminal, never stored in logs. `down`, `status`, `doctor`, and `apk` are also
+available. `apk` verifies and prints the release URL/checksum; the release APK
+currently targets arm64-v8a only and is never installed with adb without an
+extra explicit interactive confirmation.
+
+For a fixed public hostname, the owner must configure a Cloudflare named tunnel
+and domain. The installer does not invent or create persistent public URLs.
 
 Useful commands:
 
 ```bash
-./install.sh install --apk          # Android app only
-./install.sh install --all          # bridge and APK
-./install.sh install --dry-run      # show actions, write nothing
+./install.sh setup                  # one-time setup
+./install.sh up                     # start / choose a transport
+./install.sh down                   # stop managed bridge/tunnel
+./install.sh status                 # concise status
 ./install.sh doctor                 # dependencies, permissions, health
+./install.sh apk                    # verified APK URL and checksum
 ./install.sh update                 # replace the bridge with the latest release
 ./install.sh uninstall              # remove the bridge, keep config and data
 ./install.sh uninstall --purge      # remove config and data too

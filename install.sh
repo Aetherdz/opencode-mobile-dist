@@ -537,6 +537,8 @@ install_bridge() {
   if [ -d "$PREFIX/bridge/current" ] && { [ ! -x "$BIN_DIR/opencode-mobile" ] || [ ! -x "$BIN_DIR/opencode-mobile-bridge" ]; }; then
     if [[ "${UI_MINIMAL:-0}" != 1 ]]; then info "Existing bridge archive found; repairing launchers without replacing configuration."; fi
     mkdir -p "$BIN_DIR"
+    local installer_copy="$BIN_DIR/opencode-mobile-installer"
+    persist_installer
     local launcher="$BIN_DIR/opencode-mobile-bridge"
     cat > "$launcher" <<EOF
 #!/usr/bin/env sh
@@ -549,8 +551,6 @@ set +a
 exec node "$PREFIX/bridge/current/dist/index.js" "\$@"
 EOF
     chmod 755 "$launcher"
-    local installer_copy="$BIN_DIR/opencode-mobile-installer"
-    persist_installer
     for local_cmd in opencode-mobile-up opencode-mobile-down opencode-mobile-apk; do
       local subcommand="${local_cmd#opencode-mobile-}"
       cat > "$BIN_DIR/$local_cmd" <<EOF

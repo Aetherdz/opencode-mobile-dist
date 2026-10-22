@@ -81,7 +81,9 @@ test -x "$BIN_DIR/opencode-mobile"
 test -x "$BIN_DIR/opencode-mobile-down"
 test -x "$BIN_DIR/opencode-mobile-apk"
 test -x "$BIN_DIR/opencode-mobile-up"
-
+grep -q 'opencode-mobile-installer" up' "$BIN_DIR/opencode-mobile"
+output="$("$ROOT_DIR/install.sh" setup --prefix "$PREFIX" --bin-dir "$BIN_DIR" --workdir "$WORKDIR" --no-color)"
+printf '%s\n' "$output" | grep -q 'Setup complete. Run: opencode-mobile'
 "$ROOT_DIR/install.sh" doctor --prefix "$PREFIX" --bin-dir "$BIN_DIR" --no-color
 "$ROOT_DIR/install.sh" status --prefix "$PREFIX" --bin-dir "$BIN_DIR" --no-color
 before="$(awk -F= '/^AUTH_TOKEN=/{print $2}' "$CONFIG_HOME/opencode-mobile/bridge.env")"

@@ -31,6 +31,8 @@ against `SHA256SUMS`.
 curl -fsSL https://raw.githubusercontent.com/Aetherdz/opencode-mobile-dist/main/install.sh | bash -s -- setup
 ```
 
+After setup, start it with just `opencode-mobile` (no `up`).
+
 This command invokes the installer directly; use it only if you trust the
 repository's current `main` branch. For high-assurance or offline review,
 download a pinned commit, inspect it, and execute the local copy instead.
@@ -41,7 +43,7 @@ inspect it, then run `bash install.sh setup`.
 `setup` checks Node/OpenCode, installs the bridge after verifying its release
 `SHA256SUMS`, creates `$HOME/projects` if missing, and preserves an existing
 token/config. It never uses the entire home directory as a workdir.
-`up` starts OpenCode and the bridge, checks health, and creates a public
+`opencode-mobile` starts OpenCode and the bridge, checks health, and creates a public
 temporary Cloudflare Quick Tunnel after explicit confirmation each run.
 Anyone with both URL and token can control the agent. The token and QR payload
 are printed only in the local terminal, never stored in logs. `cloudflared` is

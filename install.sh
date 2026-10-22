@@ -598,6 +598,9 @@ EOF
   cat > "$BIN_DIR/opencode-mobile" <<EOF
 #!/usr/bin/env sh
 set -eu
+if [ "\$#" -eq 0 ]; then
+  exec "$BIN_DIR/opencode-mobile-installer" up
+fi
 exec "$BIN_DIR/opencode-mobile-installer" "\$@"
 EOF
   chmod 755 "$BIN_DIR/opencode-mobile"
@@ -624,8 +627,8 @@ EOF
     *":$BIN_DIR:"*) ;;
     *) warn "$BIN_DIR is not in PATH. Add it or run $launcher directly." ;;
   esac
-  ok "Start the bridge with: opencode-mobile-bridge"
-  ok "Run: opencode-mobile up | down | status | doctor | apk"
+  ok "Start the app with: opencode-mobile"
+  ok "Management: opencode-mobile down | status | doctor | apk"
 }
 
 install_apk() {
@@ -777,7 +780,7 @@ quickstart() {
   if ! has_cmd cloudflared; then
     printf 'cloudflared is missing. Download the official binary, verify its SHA-256, and install it under %s (no sudo)? [Y/n] ' "$BIN_DIR"
     read -r answer || answer=""
-    case "$answer" in n|N|no|NO) die "Cancelled. Install cloudflared manually, then run opencode-mobile up." ;; esac
+    case "$answer" in n|N|no|NO) die "Cancelled. Install cloudflared manually, then run opencode-mobile." ;; esac
     install_cloudflared
   fi
   case ":$PATH:" in
@@ -842,7 +845,7 @@ quickstart() {
     fi
     sleep 1
   done
-  [ "$ready" = 1 ] || die "OpenCode did not connect. Start 'opencode service start', then rerun 'opencode-mobile up'."
+  [ "$ready" = 1 ] || die "OpenCode did not connect. Start 'opencode service start', then rerun 'opencode-mobile'."
 
   if [ "$mode" = cloudflare ]; then
     cloudflared tunnel --url "http://127.0.0.1:$port" >"$tunnel_log" 2>&1 &
@@ -970,7 +973,7 @@ do_setup() {
   need_cmd opencode
   COMMAND="setup"
   install_bridge
-  printf '\nSetup complete. Run: opencode-mobile up\n'
+  printf '\nSetup complete. Run: opencode-mobile\n'
 }
 
 doctor() {

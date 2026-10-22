@@ -534,7 +534,7 @@ install_bridge() {
       # Repair launchers independently: the bridge can already be present while
       # a user removed just the primary command. setup's source must be saved
       # before generating launchers that call the saved installer.
-      if [ ! -x "$BIN_DIR/opencode-mobile" ] || [ ! -x "$BIN_DIR/opencode-mobile-bridge" ] || [ ! -x "$BIN_DIR/opencode-mobile-installer" ] || [ ! -x "$PREFIX/installer" ]; then
+      if [ ! -x "$BIN_DIR/opencode-mobile-installer" ] || [ ! -x "$PREFIX/installer" ] || [ "$OPENCODE_MOBILE_INSTALLER_SOURCE" != "$BIN_DIR/opencode-mobile-installer" ]; then
         mkdir -p "$BIN_DIR"
         persist_installer
       fi
@@ -574,7 +574,6 @@ EOF
           chmod 755 "$BIN_DIR/$local_cmd"
         fi
       done
-      create_config
     fi
     if [[ "${UI_MINIMAL:-0}" != 1 ]]; then ok "Keeping the existing bridge installation"; fi
     if [[ "${UI_MINIMAL:-0}" == 1 && "$COMMAND" != setup ]]; then persist_installer; fi
@@ -619,7 +618,7 @@ EOF
     info "Dry run complete. No files were changed."
     return 0
   fi
-  persist_installer
+  if [ "$COMMAND" != "setup" ] || [ ! -x "$BIN_DIR/opencode-mobile-installer" ] || [ ! -x "$PREFIX/installer" ]; then persist_installer; fi
 
   case "$(uname -s):$(uname -m)" in
     Linux:x86_64|Linux:aarch64|Linux:arm64|Darwin:x86_64|Darwin:arm64) ;;

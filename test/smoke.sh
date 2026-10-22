@@ -106,8 +106,6 @@ cat > "$FAKE_BIN/opencode" <<'EOF'
 exit 0
 EOF
 chmod +x "$FAKE_BIN/opencode"
-
-# setup repairs a missing primary launcher on an existing install.
 mv "$BIN_DIR/opencode-mobile" "$BIN_DIR/opencode-mobile.old"
 mv "$BIN_DIR/opencode-mobile-apk" "$BIN_DIR/opencode-mobile-apk.old"
 mv "$BIN_DIR/opencode-mobile-installer" "$BIN_DIR/opencode-mobile-installer.old"

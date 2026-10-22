@@ -574,6 +574,7 @@ EOF
           chmod 755 "$BIN_DIR/$local_cmd"
         fi
       done
+      create_config
     fi
     if [[ "${UI_MINIMAL:-0}" != 1 ]]; then ok "Keeping the existing bridge installation"; fi
     if [[ "${UI_MINIMAL:-0}" == 1 && "$COMMAND" != setup ]]; then persist_installer; fi

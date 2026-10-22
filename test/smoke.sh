@@ -39,6 +39,7 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     -o) out="$2"; shift 2 ;;
     --retry|--proto|--max-time|--connect-timeout) shift 2 ;;
+    --progress-bar|--tlsv1.2) shift ;;
     -*) shift ;;
     *) url="$1"; shift ;;
   esac
@@ -69,7 +70,9 @@ export RELEASE_DIR
 export XDG_CONFIG_HOME="$CONFIG_HOME"
 export XDG_DATA_HOME="$DATA_HOME"
 
-"$ROOT_DIR/install.sh" install --prefix "$PREFIX" --bin-dir "$BIN_DIR" --workdir "$WORKDIR" --no-color
+INSTALLER_COPY="$WORK/install-copy.sh"
+cp "$ROOT_DIR/install.sh" "$INSTALLER_COPY"
+bash "$INSTALLER_COPY" install --prefix "$PREFIX" --bin-dir "$BIN_DIR" --workdir "$WORKDIR" --no-color
 test -f "$PREFIX/bridge/current/dist/index.js"
 test -x "$BIN_DIR/opencode-mobile-bridge"
 test -f "$CONFIG_HOME/opencode-mobile/bridge.env"
@@ -82,8 +85,32 @@ test -x "$BIN_DIR/opencode-mobile-down"
 test -x "$BIN_DIR/opencode-mobile-apk"
 test -x "$BIN_DIR/opencode-mobile-up"
 grep -q 'opencode-mobile-installer" up' "$BIN_DIR/opencode-mobile"
+cmp "$INSTALLER_COPY" "$BIN_DIR/opencode-mobile-installer"
 output="$("$ROOT_DIR/install.sh" setup --prefix "$PREFIX" --bin-dir "$BIN_DIR" --workdir "$WORKDIR" --no-color)"
 printf '%s\n' "$output" | grep -q 'Setup complete. Run: opencode-mobile'
+printf 'fake node\n' > "$FAKE_BIN/node"
+cat > "$FAKE_BIN/node" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1" = "-p" ]; then echo 22; else echo v22.0.0; fi
+EOF
+chmod +x "$FAKE_BIN/node"
+cat > "$FAKE_BIN/opencode" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$FAKE_BIN/opencode"
+STREAM_PREFIX="$WORK/stream-prefix"
+STREAM_BIN="$WORK/stream-bin"
+STREAM_CONFIG="$WORK/stream-config"
+STREAM_DATA="$WORK/stream-data"
+mkdir -p "$STREAM_BIN" "$STREAM_PREFIX" "$STREAM_CONFIG" "$STREAM_DATA"
+export XDG_CONFIG_HOME="$STREAM_CONFIG" XDG_DATA_HOME="$STREAM_DATA"
+cat "$ROOT_DIR/install.sh" | "$ROOT_DIR/install.sh" setup --prefix "$STREAM_PREFIX" --bin-dir "$STREAM_BIN" --workdir "$WORKDIR" --no-color > "$WORK/stream-output"
+grep -q 'Setup complete. Run: opencode-mobile' "$WORK/stream-output"
+test -x "$STREAM_BIN/opencode-mobile-installer"
+cmp "$ROOT_DIR/install.sh" "$STREAM_BIN/opencode-mobile-installer"
+test ! -e "$WORK"/opencode-mobile-installer.*
+export XDG_CONFIG_HOME="$CONFIG_HOME" XDG_DATA_HOME="$DATA_HOME"
 "$ROOT_DIR/install.sh" doctor --prefix "$PREFIX" --bin-dir "$BIN_DIR" --no-color
 "$ROOT_DIR/install.sh" status --prefix "$PREFIX" --bin-dir "$BIN_DIR" --no-color
 before="$(awk -F= '/^AUTH_TOKEN=/{print $2}' "$CONFIG_HOME/opencode-mobile/bridge.env")"

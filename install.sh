@@ -54,8 +54,8 @@ setup_colors() {
   fi
 }
 
-info() { [ "$QUIET" = 1 ] || printf '%s\n' "${BOLD}::${RESET} $*"; }
-ok() { [ "$QUIET" = 1 ] || printf '%s\n' "${GREEN}OK${RESET}  $*"; }
+info() { [ "$QUIET" = 1 ] || printf '%s\n' "${BOLD}›${RESET} $*"; }
+ok() { [ "$QUIET" = 1 ] || printf '%s\n' "${GREEN}✓${RESET} $*"; }
 warn() { [ "$QUIET" = 1 ] || printf '%s\n' "${YELLOW}WARN${RESET} $*" >&2; }
 die() {
   trap - ERR
@@ -292,7 +292,7 @@ download_file() {
     if [ "$QUIET" = 1 ]; then
       curl -fsSL --retry 3 --proto '=https' --tlsv1.2 -o "$dest" "$url"
     else
-      curl -fL --retry 3 --proto '=https' --tlsv1.2 -o "$dest" "$url"
+      curl -fL --retry 3 --proto '=https' --tlsv1.2 --progress-bar -o "$dest" "$url"
     fi
   elif has_cmd wget; then
     wget -q --https-only -O "$dest" "$url"
@@ -512,6 +512,7 @@ EOF
     info "Dry run complete. No files were changed."
     return 0
   fi
+  persist_installer
 
   case "$(uname -s):$(uname -m)" in
     Linux:x86_64|Linux:aarch64|Linux:arm64|Darwin:x86_64|Darwin:arm64) ;;
@@ -584,8 +585,10 @@ EOF
     chmod 755 "$installer_copy"
     cp "$0" "$PREFIX/installer"
     chmod 755 "$PREFIX/installer"
+  elif [ -x "$installer_copy" ] && [ -x "$PREFIX/installer" ]; then
+    : # The streamed setup path persisted these copies before installing.
   else
-    die "Cannot persist the installer required by the opencode-mobile command. Run setup from a saved local installer file."
+    die "Cannot persist the installer required by opencode-mobile. Use the published one-line setup command."
   fi
 
   local up_launcher="$BIN_DIR/opencode-mobile-up"
@@ -973,7 +976,22 @@ do_setup() {
   need_cmd opencode
   COMMAND="setup"
   install_bridge
-  printf '\nSetup complete. Run: opencode-mobile\n'
+  if [ "$DRY_RUN" = 1 ]; then
+    info "Dry run complete; no installation was performed."
+  else
+    printf '\nSetup complete. Run: opencode-mobile\n'
+  fi
+}
+
+persist_installer() {
+  local source="${OPENCODE_MOBILE_INSTALLER_SOURCE:-}"
+  [ -n "$source" ] || return 0
+  [ -r "$source" ] || die "Installer source is no longer readable: $source"
+  mkdir -p "$BIN_DIR" "$PREFIX"
+  cp "$source" "$BIN_DIR/opencode-mobile-installer"
+  chmod 755 "$BIN_DIR/opencode-mobile-installer"
+  cp "$source" "$PREFIX/installer"
+  chmod 755 "$PREFIX/installer"
 }
 
 doctor() {
@@ -1103,7 +1121,20 @@ main() {
 
   case "$COMMAND" in
     setup)
+      if [ -f "$0" ] && [ -r "$0" ]; then
+        export OPENCODE_MOBILE_INSTALLER_SOURCE="$0"
+      elif [ -r /dev/stdin ]; then
+        OPENCODE_MOBILE_STREAM_TMP="$(mktemp "${TMPDIR:-/tmp}/opencode-mobile-installer.XXXXXX")"
+        chmod 600 "$OPENCODE_MOBILE_STREAM_TMP"
+        export OPENCODE_MOBILE_INSTALLER_SOURCE="$OPENCODE_MOBILE_STREAM_TMP"
+        cat /dev/stdin > "$OPENCODE_MOBILE_STREAM_TMP"
+      else
+        die "Cannot read installer source. Run using the saved install.sh file."
+      fi
+      trap 'if [ -n "${OPENCODE_MOBILE_STREAM_TMP:-}" ]; then rm -f "$OPENCODE_MOBILE_STREAM_TMP"; fi' EXIT
       do_setup
+      if [ -n "${OPENCODE_MOBILE_STREAM_TMP:-}" ]; then rm -f "$OPENCODE_MOBILE_STREAM_TMP"; unset OPENCODE_MOBILE_STREAM_TMP; fi
+      trap cleanup EXIT
       ;;
     quickstart)
       quickstart

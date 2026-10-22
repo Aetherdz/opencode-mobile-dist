@@ -31,7 +31,9 @@ execution. The website's one-line bootstrap is convenient but trusts `main`.
 git clone https://github.com/Aetherdz/opencode-mobile-dist.git
 cd opencode-mobile-dist
 less install.sh
-bash install.sh setup --workdir "$HOME/projects"
+INSTALLER_DIR="$HOME/.local/share/opencode-mobile-installer"
+mkdir -p "$INSTALLER_DIR" "$HOME/.local/bin" && cp install.sh "$INSTALLER_DIR/install.sh" && chmod 700 "$INSTALLER_DIR/install.sh"
+bash "$INSTALLER_DIR/install.sh" setup --workdir "$HOME/projects"
 opencode-mobile up
 ```
 
@@ -43,17 +45,22 @@ URL and verify a SHA-256 published through a separately trusted channel.
 `setup` checks Node/OpenCode, installs the bridge after verifying its release
 `SHA256SUMS`, prompts for a specific project directory, and preserves an
 existing token/config. It never uses the entire home directory by default.
-`up` starts OpenCode and the bridge, checks health, then offers private
-Tailscale Serve or a public temporary Cloudflare Quick Tunnel. The public mode
-requires explicit confirmation every time; anyone with both URL and token can
-control the agent. The token and QR payload are printed only in the local
-terminal, never stored in logs. `down`, `status`, `doctor`, and `apk` are also
+`up` starts OpenCode and the bridge, checks health, and creates a public
+temporary Cloudflare Quick Tunnel after explicit confirmation each run.
+Anyone with both URL and token can control the agent. The token and QR payload
+are printed only in the local terminal, never stored in logs. `cloudflared` is
+downloaded from the official release and checked against its SHA-256 before
+being placed in the user bin directory; no sudo or system package changes are
+needed on supported Linux/macOS architectures. `down`, `status`, `doctor`, and `apk` are also
 available. `apk` verifies and prints the release URL/checksum; the release APK
 currently targets arm64-v8a only and is never installed with adb without an
 extra explicit interactive confirmation.
 
-For a fixed public hostname, the owner must configure a Cloudflare named tunnel
-and domain. The installer does not invent or create persistent public URLs.
+The whole selected project directory is exposed via the bearer token. For
+reduced exposure, use a dedicated work directory containing only projects
+intended for remote agent access. For a fixed public hostname, the owner must
+configure a Cloudflare named tunnel and domain; this installer does not invent
+or create persistent public URLs.
 
 Useful commands:
 

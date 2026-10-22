@@ -6,7 +6,7 @@
 # pairing details only in the foreground terminal.
 set -euo pipefail
 
-INSTALLER_VERSION="0.2.0"
+INSTALLER_VERSION="0.3.0"
 DEFAULT_REPO="Aetherdz/opencode-mobile"
 DEFAULT_PREFIX="${XDG_DATA_HOME:-$HOME/.local/share}/opencode-mobile"
 DEFAULT_BIN_DIR="$HOME/.local/bin"
@@ -106,7 +106,7 @@ Usage:
 Commands:
   install       Install the bridge (default) and optionally the Android app.
   setup         Install/configure once; preserves existing token and settings.
-  up            Start OpenCode, bridge, then select Tailscale or public tunnel.
+  up            Start OpenCode and bridge, then create a temporary public link.
   down          Stop services started by this tool and release its lock.
   status        Show a short local service status.
   apk           Verify and display the latest Android APK URL and SHA-256.
@@ -161,7 +161,7 @@ qr_output() {
 parse_args() {
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      install|setup|quickstart|up|down|status|apk|update|doctor|uninstall|version|help)
+  install|setup|quickstart|up|down|status|apk|update|doctor|uninstall|version|help)
         COMMAND="$1"
         ;;
       --bridge)
@@ -352,7 +352,9 @@ release_url() {
 }
 
 prepare_workdir() {
-  if [ -z "$WORKDIR" ]; then WORKDIR="$DEFAULT_WORKDIR"; fi
+  if [ -z "$WORKDIR" ]; then
+    WORKDIR="$DEFAULT_WORKDIR"
+  fi
   case "$WORKDIR" in
     /*) ;;
     *) die "--workdir must be an absolute path" ;;
@@ -447,13 +449,10 @@ select_workdir() {
     prepare_workdir
     return
   fi
-  [ -t 0 ] || die "setup needs an interactive terminal to select a projects directory; use --workdir /absolute/path"
-  local suggested answer
+  local suggested
   suggested="$HOME/projects"
-  printf 'Projects directory (choose a specific directory; home itself is not allowed) [%s]: ' "$suggested"
-  read -r answer || answer=""
-  WORKDIR="${answer:-$suggested}"
-  [ "$WORKDIR" != "$HOME" ] || die "Do not use your home directory as the allowed workdir; choose a projects folder."
+  WORKDIR="$suggested"
+  info "Using project directory: $WORKDIR (override with --workdir /path)"
   prepare_workdir
 }
 
@@ -690,14 +689,13 @@ install_cloudflared() {
   system="$(uname -s)"
   arch="$(uname -m)"
 
-  [ "$YES" = 1 ] || die "cloudflared is missing. Install from https://developers.cloudflare.com/tunnel/downloads/, then rerun with --yes to approve the package install."
-
   case "$system:$PREFIX:$PATH" in
     Linux:*:*"/com.termux"*|Linux:/data/data/com.termux/*)
       need_cmd pkg
+      [ "$YES" = 1 ] || die "Termux requires approval to install cloudflared using pkg. Run again with --yes."
       pkg install -y cloudflared
       ;;
-      Linux:*)
+    Linux:*)
       case "$arch" in
         x86_64|amd64) asset="cloudflared-linux-amd64" ;;
         aarch64|arm64) asset="cloudflared-linux-arm64" ;;
@@ -721,18 +719,32 @@ install_cloudflared() {
       download_file "https://github.com/cloudflare/cloudflared/releases/download/$cloudflared_version/$asset" "$binary"
       [ "$(sha256_of "$binary")" = "$checksum" ] || die "cloudflared checksum mismatch; refusing to install the binary"
       chmod 755 "$binary"
-      if [ -w "$HOME/.local/bin" ] || mkdir -p "$HOME/.local/bin" 2>/dev/null; then
-        install -m 0755 "$binary" "$HOME/.local/bin/cloudflared"
-      elif [ "$(id -u)" -eq 0 ]; then
-        install -m 0755 "$binary" /usr/local/bin/cloudflared
-      else
-        die "Cannot install cloudflared to ~/.local/bin. Create it or install cloudflared using the official package instructions."
-      fi
-      case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$HOME/.local/bin:$PATH"; export PATH ;; esac
+      mkdir -p "$BIN_DIR"
+      install -m 0755 "$binary" "$BIN_DIR/cloudflared"
+      PATH="$BIN_DIR:$PATH"
+      export PATH
       ;;
     Darwin:*)
-      has_cmd brew || die "Install Homebrew first: https://brew.sh/"
-      brew install cloudflared
+      if has_cmd brew; then
+        [ "$YES" = 1 ] || die "Homebrew installation needs approval. Run again with --yes, or install cloudflared manually."
+        brew install cloudflared
+      else
+        [ "$arch" = arm64 ] || [ "$arch" = x86_64 ] || die "Unsupported macOS architecture for cloudflared: $arch"
+        local mac_asset mac_binary checksum release_json cloudflared_version
+        case "$arch" in arm64) mac_asset=cloudflared-darwin-arm64 ;; x86_64) mac_asset=cloudflared-darwin-amd64 ;; esac
+        release_json="$(fetch_text https://api.github.com/repos/cloudflare/cloudflared/releases/latest)"
+        cloudflared_version="$(printf '%s' "$release_json" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([0-9][0-9.]*\)".*/\1/p' | head -n 1)"
+        checksum="$(printf '%s' "$release_json" | awk -v asset="$mac_asset" '/### SHA256 Checksums:/ { active=1; next } active && $1 == asset ":" { print $2; exit }')"
+        case "$checksum" in *[!0-9a-f]*|'') die "No official SHA-256 checksum for $mac_asset" ;; esac
+        [ "${#checksum}" -eq 64 ] || die "Invalid cloudflared checksum"
+        [ -n "$TMP_DIR" ] || TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/opencode-mobile.XXXXXX")"
+        mac_binary="$TMP_DIR/cloudflared"
+        download_file "https://github.com/cloudflare/cloudflared/releases/download/$cloudflared_version/$mac_asset" "$mac_binary"
+        [ "$(sha256_of "$mac_binary")" = "$checksum" ] || die "cloudflared checksum mismatch"
+        mkdir -p "$BIN_DIR"
+        install -m 0755 "$mac_binary" "$BIN_DIR/cloudflared"
+        PATH="$BIN_DIR:$PATH"; export PATH
+      fi
       ;;
     *)
       die "Automatic cloudflared setup is unsupported on this OS. See https://developers.cloudflare.com/tunnel/downloads/"
@@ -749,34 +761,30 @@ quickstart() {
     step "Quickstart plan"
     info "Would install and verify the bridge release"
     info "Would prepare a private mode-600 config and local pairing token"
-    info "Would start OpenCode and bridge, then offer Tailscale Serve or an explicitly approved Cloudflare Quick Tunnel"
-    info "Would display connection URL, QR payload and pairing token locally only"
+    info "Would start OpenCode and bridge, create a public temporary Quick Tunnel after explicit consent"
+    info "Would display a QR when qrencode is present and always print URL plus token locally"
     return 0
   fi
 
   QUIET=1
   install_bridge
   QUIET=0
-  [ -t 0 ] || die "up needs an interactive terminal to select a network mode and display its local token."
-  printf 'Choose phone access: [t] Tailscale Serve (private, preferred), [c] Cloudflare Quick Tunnel (public, temporary): '
-  local mode answer
-  read -r mode || mode=""
-  case "$mode" in
-    t|T|tailscale)
-      need_cmd tailscale
-      ;;
-    c|C|cloudflare)
-      printf 'WARNING: anyone who obtains the URL and token can control the agent (effectively shell-level access). The URL is public, temporary, and not saved. Continue? [y/N] '
-      read -r answer || answer=""
-      case "$answer" in y|Y|yes|YES) ;; *) die "No changes made." ;; esac
-      if ! has_cmd cloudflared; then
-        printf 'cloudflared is missing. Install from the official instructions? This may require package-manager approval/sudo. [y/N] '
-        read -r answer || answer=""
-        case "$answer" in y|Y|yes|YES) install_cloudflared ;; *) die "Install cloudflared manually, then run opencode-mobile up." ;; esac
-      fi
-      ;;
-    *) die "Choose Tailscale or Cloudflare." ;;
+  [ -t 0 ] || die "up requires a terminal to show the local pairing details."
+  printf 'WARNING: this creates a public temporary URL. Anyone with the URL and token can control the agent, which may allow shell-level actions on the allowed project folders. The URL is not saved and changes on restart. Continue? [y/N] '
+  local answer
+  read -r answer || answer=""
+  case "$answer" in y|Y|yes|YES) ;; *) die "No changes made." ;; esac
+  if ! has_cmd cloudflared; then
+    printf 'cloudflared is missing. Download the official binary, verify its SHA-256, and install it under %s (no sudo)? [Y/n] ' "$BIN_DIR"
+    read -r answer || answer=""
+    case "$answer" in n|N|no|NO) die "Cancelled. Install cloudflared manually, then run opencode-mobile up." ;; esac
+    install_cloudflared
+  fi
+  case ":$PATH:" in
+    *":$BIN_DIR:"*) ;;
+    *) PATH="$BIN_DIR:$PATH"; export PATH ;;
   esac
+  local mode="cloudflare"
 
   acquire_lock
   trap 'stop_children; release_lock; cleanup' EXIT
@@ -836,7 +844,7 @@ quickstart() {
   done
   [ "$ready" = 1 ] || die "OpenCode did not connect. Start 'opencode service start', then rerun 'opencode-mobile up'."
 
-  if [ "$mode" = c ] || [ "$mode" = C ] || [ "$mode" = cloudflare ]; then
+  if [ "$mode" = cloudflare ]; then
     cloudflared tunnel --url "http://127.0.0.1:$port" >"$tunnel_log" 2>&1 &
     TUNNEL_PID=$!
     printf '%s\n' "$TUNNEL_PID" > "$LOCK_DIR/tunnel.pid"
@@ -848,11 +856,6 @@ quickstart() {
     done
     [ -n "$tunnel_url" ] || die "Cloudflare Tunnel did not return a link in time."
     connect_url="$tunnel_url"
-  else
-    tailscale serve --bg "http://127.0.0.1:$port" >/dev/null 2>&1 || tailscale serve "http://127.0.0.1:$port" >/dev/null 2>&1 || die "Could not configure Tailscale Serve. Check 'tailscale status' and Serve permissions."
-    connect_url="$(tailscale serve status 2>/dev/null | grep -Eo 'https://[^[:space:]]+' | head -n 1 || true)"
-    [ -n "$connect_url" ] || die "Tailscale Serve is configured but its HTTPS URL could not be read; run 'tailscale serve status'."
-    TAILSCALE_SERVE=1
   fi
 
   # Read only the hex token from a non-executed config parser; don't source
@@ -865,16 +868,16 @@ quickstart() {
   local qr_payload
   qr_payload="$(node -e 'const u=new URL("opencode-mobile://connect");u.searchParams.set("url",process.argv[1]);u.searchParams.set("token",process.argv[2]);process.stdout.write(u.toString())' "$connect_url" "$token")"
   qr_output "$qr_payload"
+  if ! has_cmd qrencode; then
+    printf '  QR unavailable: install qrencode (or enable it in the installer) to render the code here.\n'
+  fi
   unset qr_payload
   unset token
   printf 'Scan QR or enter URL and token manually. Keep this terminal open; Ctrl+C stops the managed bridge/session.\n'
   if [ -n "$tunnel_url" ]; then printf 'This public temporary URL is not saved and expires when stopped.\n'; fi
 
-  if wait "$TUNNEL_PID"; then
-    die "Cloudflare Tunnel stopped."
-  else
-    die "Cloudflare Tunnel stopped."
-  fi
+  wait "$TUNNEL_PID" || die "Cloudflare Tunnel stopped unexpectedly."
+  die "Cloudflare Tunnel stopped unexpectedly."
 }
 
 acquire_lock() {

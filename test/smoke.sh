@@ -38,7 +38,7 @@ url=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -o) out="$2"; shift 2 ;;
-    --retry|--proto) shift 2 ;;
+    --retry|--proto|--max-time|--connect-timeout) shift 2 ;;
     -*) shift ;;
     *) url="$1"; shift ;;
   esac
@@ -80,6 +80,7 @@ test -x "$PREFIX/installer"
 test -x "$BIN_DIR/opencode-mobile"
 test -x "$BIN_DIR/opencode-mobile-down"
 test -x "$BIN_DIR/opencode-mobile-apk"
+test -x "$BIN_DIR/opencode-mobile-up"
 
 "$ROOT_DIR/install.sh" doctor --prefix "$PREFIX" --bin-dir "$BIN_DIR" --no-color
 "$ROOT_DIR/install.sh" status --prefix "$PREFIX" --bin-dir "$BIN_DIR" --no-color
@@ -91,6 +92,7 @@ after="$(awk -F= '/^AUTH_TOKEN=/{print $2}' "$CONFIG_HOME/opencode-mobile/bridge
 test "$before" = "$after"
 "$ROOT_DIR/install.sh" quickstart --dry-run --yes --workdir "$WORKDIR" --prefix "$PREFIX" --bin-dir "$BIN_DIR" --no-color
 "$ROOT_DIR/install.sh" up --dry-run --yes --workdir "$WORKDIR" --prefix "$PREFIX" --bin-dir "$BIN_DIR" --no-color
+"$ROOT_DIR/install.sh" status --prefix "$PREFIX" --bin-dir "$BIN_DIR" --no-color | grep -q 'stopped'
 if "$ROOT_DIR/install.sh" install --workdir "$HOME" --prefix "$WORKDIR/prefix" --bin-dir "$WORKDIR/bin" --no-color >/dev/null 2>&1; then
   echo "expected refusal of home directory as workdir" >&2
   exit 1

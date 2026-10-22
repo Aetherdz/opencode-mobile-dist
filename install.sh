@@ -452,7 +452,7 @@ select_workdir() {
   local suggested
   suggested="$HOME/projects"
   WORKDIR="$suggested"
-  info "Using project directory: $WORKDIR (override with --workdir /path)"
+    info "Using project directory: $WORKDIR (override with --workdir /path)"
   prepare_workdir
 }
 

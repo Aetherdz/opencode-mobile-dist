@@ -23,28 +23,24 @@ guide.
 
 ## Linux and macOS quick setup
 
-Review the script and install from a local copy. For stronger pinning, download
-from a reviewed commit URL and verify that commit's published SHA-256 before
-execution. The website's one-line bootstrap is convenient but trusts `main`.
+Run this single command to download and install the current script. It trusts
+the GitHub `main` branch; downloaded release assets are separately checked
+against `SHA256SUMS`.
 
 ```bash
-git clone https://github.com/Aetherdz/opencode-mobile-dist.git
-cd opencode-mobile-dist
-less install.sh
-INSTALLER_DIR="$HOME/.local/share/opencode-mobile-installer"
-mkdir -p "$INSTALLER_DIR" "$HOME/.local/bin" && cp install.sh "$INSTALLER_DIR/install.sh" && chmod 700 "$INSTALLER_DIR/install.sh"
-bash "$INSTALLER_DIR/install.sh" setup --workdir "$HOME/projects"
-opencode-mobile up
+curl -fsSL https://raw.githubusercontent.com/Aetherdz/opencode-mobile-dist/main/install.sh | bash -s -- setup
 ```
 
-If you bootstrap directly from GitHub Pages, download the installer to disk,
-review it with `less`, and only then execute it. Do not use `curl | bash` for
-unreviewed or unpinned code. For stronger provenance, fetch a reviewed commit
-URL and verify a SHA-256 published through a separately trusted channel.
+This command invokes the installer directly; use it only if you trust the
+repository's current `main` branch. For high-assurance or offline review,
+download a pinned commit, inspect it, and execute the local copy instead.
+
+For review-first installation, download the script from a specific commit,
+inspect it, then run `bash install.sh setup`.
 
 `setup` checks Node/OpenCode, installs the bridge after verifying its release
-`SHA256SUMS`, prompts for a specific project directory, and preserves an
-existing token/config. It never uses the entire home directory by default.
+`SHA256SUMS`, creates `$HOME/projects` if missing, and preserves an existing
+token/config. It never uses the entire home directory as a workdir.
 `up` starts OpenCode and the bridge, checks health, and creates a public
 temporary Cloudflare Quick Tunnel after explicit confirmation each run.
 Anyone with both URL and token can control the agent. The token and QR payload

@@ -16,6 +16,7 @@ binaries are attached to that repository's GitHub Releases.
 - Optionally downloads and installs the Android APK through `adb`.
 - Verifies every downloaded asset against the release `SHA256SUMS`.
 - Provides `doctor`, `update`, and `uninstall` commands.
+- Prints a phone pairing QR, URL, and token on startup (QR rendering requires `qrencode`).
 
 The bridge listens on `127.0.0.1:8787` by default. Remote access is expected to
 go through Tailscale or a reverse proxy; see the main repository's deployment

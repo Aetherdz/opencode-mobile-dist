@@ -106,6 +106,9 @@ cat > "$FAKE_BIN/opencode" <<'EOF'
 exit 0
 EOF
 chmod +x "$FAKE_BIN/opencode"
+mkdir -p "$PREFIX/bridge/current/dist" "$PREFIX/bridge/current/node_modules"
+cp "$WORK/bundle/package.json" "$PREFIX/bridge/current/package.json"
+cp "$WORK/bundle/dist/index.js" "$PREFIX/bridge/current/dist/index.js"
 mv "$BIN_DIR/opencode-mobile" "$BIN_DIR/opencode-mobile.old"
 mv "$BIN_DIR/opencode-mobile-apk" "$BIN_DIR/opencode-mobile-apk.old"
 mv "$BIN_DIR/opencode-mobile-installer" "$BIN_DIR/opencode-mobile-installer.old"
@@ -114,6 +117,7 @@ test -x "$BIN_DIR/opencode-mobile"
 test -x "$BIN_DIR/opencode-mobile-apk"
 test -x "$BIN_DIR/opencode-mobile-installer"
 grep -q 'opencode-mobile-installer" up' "$BIN_DIR/opencode-mobile"
+grep -q 'up "\$@"' "$BIN_DIR/opencode-mobile"
 
 STREAM_PREFIX="$WORK/stream-prefix"
 STREAM_BIN="$WORK/stream-bin"
@@ -160,6 +164,7 @@ test ! -e "$BIN_DIR/opencode-mobile"
 test ! -e "$BIN_DIR/opencode-mobile-up"
 test ! -e "$BIN_DIR/opencode-mobile-down"
 test ! -e "$BIN_DIR/opencode-mobile-apk"
+test ! -e "$BIN_DIR/opencode-mobile-installer"
 test ! -e "$CONFIG_HOME/opencode-mobile"
 
 echo "smoke test passed"

@@ -597,8 +597,9 @@ exec node "$PREFIX/bridge/current/dist/index.js" "\$@"
 EOF
     chmod 755 "$launcher"
     persist_installer
-    for local_cmd in opencode-mobile-up opencode-mobile-down opencode-mobile-apk; do
+    for local_cmd in opencode-mobile opencode-mobile-up opencode-mobile-down opencode-mobile-apk; do
       local subcommand="${local_cmd#opencode-mobile-}"
+      if [ "$local_cmd" = opencode-mobile ]; then subcommand="up"; fi
       cat > "$BIN_DIR/$local_cmd" <<EOF
 #!/usr/bin/env sh
 set -eu
@@ -606,12 +607,6 @@ exec "$installer_copy" $subcommand "\$@"
 EOF
       chmod 755 "$BIN_DIR/$local_cmd"
     done
-    cat > "$BIN_DIR/opencode-mobile" <<EOF
-#!/usr/bin/env sh
-set -eu
-exec "$installer_copy" up "\$@"
-EOF
-    chmod 755 "$BIN_DIR/opencode-mobile"
     return 0
   fi
 

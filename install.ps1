@@ -255,7 +255,7 @@ Examples:
   .\install.ps1 -Command doctor
   .\install.ps1 -Command uninstall -Purge
 
-The pairing token is displayed only during an explicit foreground `up` session.
+The pairing token is displayed only during an explicit foreground up session.
 "@
 }
 

@@ -40,7 +40,7 @@ jobs:
 
   powershell:
     name: PowerShell installer
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     timeout-minutes: 10
     steps:
       - name: Check out
@@ -49,9 +49,10 @@ jobs:
       - name: Parse
         shell: pwsh
         run: |
+          $tokens = $null
           $errors = $null
           [System.Management.Automation.Language.Parser]::ParseFile(
-            (Resolve-Path ./install.ps1), [ref]$null, [ref]$errors
+            (Resolve-Path ./install.ps1), [ref]$tokens, [ref]$errors
           ) | Out-Null
           if ($errors.Count) {
             $errors | Format-List | Out-String | Write-Error
@@ -59,21 +60,27 @@ jobs:
           }
 
       - name: Dry run writes nothing
-        shell: bash
+        shell: pwsh
         run: |
-          tmp="$(mktemp -d)"
-          pwsh -NoProfile -File ./install.ps1 -Command install -DryRun -NoColor \
-            -Prefix "$tmp/prefix" -BinDir "$tmp/bin" -WorkDir "$tmp/work" \
-            -DataDir "$tmp/data" -ConfigFile "$tmp/config/bridge.env"
-          test ! -e "$tmp/prefix"
-          test ! -e "$tmp/config"
+          $tmp = Join-Path $env:TEMP ([guid]::NewGuid().ToString('N'))
+          & ./install.ps1 -Command install -DryRun -NoColor `
+            -Prefix (Join-Path $tmp 'prefix') -BinDir (Join-Path $tmp 'bin') `
+            -WorkDir (Join-Path $tmp 'work') -DataDir (Join-Path $tmp 'data') `
+            -ConfigFile (Join-Path $tmp 'config/bridge.env')
+          if (Test-Path -LiteralPath $tmp) { throw 'Dry run unexpectedly wrote files' }
 
       - name: Setup dry run advertises pairing launchers
         shell: pwsh
         run: |
-          $tmp = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString('N'))
+          $tmp = Join-Path $env:TEMP ([guid]::NewGuid().ToString('N'))
           $out = & ./install.ps1 -Command setup -DryRun -NoColor `
             -Prefix "$tmp/prefix" -BinDir "$tmp/bin" -WorkDir "$tmp/work" `
             -DataDir "$tmp/data" -ConfigFile "$tmp/config/bridge.env" 2>&1 | Out-String
           if ($out -notmatch 'setup/up/down/status launchers') { throw 'Setup dry run did not describe launcher installation' }
           if (Test-Path -LiteralPath $tmp) { throw 'Dry run unexpectedly wrote files' }
+
+      - name: Help and version
+        shell: pwsh
+        run: |
+          & ./install.ps1 -Command help -NoColor | Out-Null
+          & ./install.ps1 -Command version

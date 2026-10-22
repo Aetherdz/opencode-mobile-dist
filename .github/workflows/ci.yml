@@ -62,22 +62,24 @@ jobs:
       - name: Dry run writes nothing
         shell: pwsh
         run: |
-          $tmp = Join-Path $env:RUNNER_TEMP ([guid]::NewGuid().ToString('N'))
+          $tmp = Join-Path ([IO.Path]::GetPathRoot($env:RUNNER_TEMP)) ('opencode-mobile-ci-' + [guid]::NewGuid().ToString('N'))
+          $work = Join-Path $env:RUNNER_TEMP ('opencode-mobile-work-' + [guid]::NewGuid().ToString('N'))
           & ./install.ps1 -Command install -DryRun -NoColor `
             -Prefix (Join-Path $tmp 'prefix') -BinDir (Join-Path $tmp 'bin') `
-            -WorkDir (Join-Path $tmp 'work') -DataDir (Join-Path $tmp 'data') `
+            -WorkDir $work -DataDir (Join-Path $tmp 'data') `
             -ConfigFile (Join-Path $tmp 'config/bridge.env')
-          if (Test-Path -LiteralPath $tmp) { throw 'Dry run unexpectedly wrote files' }
+          if ((Test-Path -LiteralPath $tmp) -or (Test-Path -LiteralPath $work)) { throw 'Dry run unexpectedly wrote files' }
 
       - name: Setup dry run advertises pairing launchers
         shell: pwsh
         run: |
-          $tmp = Join-Path $env:RUNNER_TEMP ([guid]::NewGuid().ToString('N'))
+          $tmp = Join-Path ([IO.Path]::GetPathRoot($env:RUNNER_TEMP)) ('opencode-mobile-ci-' + [guid]::NewGuid().ToString('N'))
+          $work = Join-Path $env:RUNNER_TEMP ('opencode-mobile-work-' + [guid]::NewGuid().ToString('N'))
           $out = & ./install.ps1 -Command setup -DryRun -NoColor `
-            -Prefix "$tmp/prefix" -BinDir "$tmp/bin" -WorkDir "$tmp/work" `
+            -Prefix "$tmp/prefix" -BinDir "$tmp/bin" -WorkDir $work `
             -DataDir "$tmp/data" -ConfigFile "$tmp/config/bridge.env" 2>&1 | Out-String
           if ($out -notmatch 'setup/up/down/status launchers') { throw 'Setup dry run did not describe launcher installation' }
-          if (Test-Path -LiteralPath $tmp) { throw 'Dry run unexpectedly wrote files' }
+          if ((Test-Path -LiteralPath $tmp) -or (Test-Path -LiteralPath $work)) { throw 'Dry run unexpectedly wrote files' }
 
       - name: Help and version
         shell: pwsh

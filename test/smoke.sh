@@ -80,6 +80,11 @@ test "$(stat -c '%a' "$CONFIG_HOME/opencode-mobile/bridge.env")" = "600"
 test "$(awk -F= '/^AUTH_TOKEN=/{print length($2)}' "$CONFIG_HOME/opencode-mobile/bridge.env")" -ge 32
 test -x "$BIN_DIR/opencode-mobile-installer"
 test -x "$PREFIX/installer"
+cat > "$FAKE_BIN/opencode" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$FAKE_BIN/opencode"
 test -x "$BIN_DIR/opencode-mobile"
 test -x "$BIN_DIR/opencode-mobile-down"
 test -x "$BIN_DIR/opencode-mobile-apk"
@@ -103,6 +108,12 @@ EOF
 chmod +x "$FAKE_BIN/node"
 cat > "$FAKE_BIN/opencode" <<'EOF'
 #!/usr/bin/env bash
+if [ "$1" = "--version" ]; then echo "opencode 1.0.0"; exit 0; fi
+if [ "$1" = "service" ] && [ "$2" = "start" ]; then
+  mkdir -p "${XDG_STATE_HOME:-$HOME/.local/state}/opencode"
+  printf '{"url":"http://127.0.0.1:9999","password":"fixture"}' > "${XDG_STATE_HOME:-$HOME/.local/state}/opencode/service.json"
+  exit 0
+fi
 exit 0
 EOF
 chmod +x "$FAKE_BIN/opencode"

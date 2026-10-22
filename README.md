@@ -96,15 +96,24 @@ path. Add it to `PATH` or call the launcher directly.
 
 ## Windows
 
-Windows 10 or newer with PowerShell 5.1 or later. The current PowerShell
-installer installs and verifies the bridge, but does not yet provide the
-Cloudflare quickstart, pairing QR, or the `opencode-mobile` launcher. `adb` is
-required only for optional APK installation.
+Windows 10 or newer with PowerShell 5.1 or later. Setup installs and verifies
+the bridge, creates launchers, and generates a protected pairing config. Pairing
+uses a temporary public Cloudflare Quick Tunnel. Install `cloudflared` from its
+official download page before starting; `adb` is required only for optional APK
+installation.
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
-.\install.ps1 -Command install -WorkDir "$env:USERPROFILE\projects"
+.\install.ps1 -Command setup -WorkDir "$env:USERPROFILE\projects"
+opencode-mobile.cmd
 ```
+
+Review the public-tunnel warning and confirm before each session. The terminal
+shows the pairing URL, token, and QR payload; install `qrencode` for a terminal
+QR or enter URL/token manually in the app. `-CopyPairing` copies the URI.
+Anyone with the URL and token can access the configured workdir. Windows
+sessions are foreground-managed: press Ctrl+C in the original window to stop;
+the separate `down` command does not kill processes.
 
 Useful commands:
 
@@ -112,6 +121,9 @@ Useful commands:
 .\install.ps1 -Command install -Apk
 .\install.ps1 -Command install -All
 .\install.ps1 -Command install -DryRun
+.\install.ps1 -Command up -CopyPairing
+.\install.ps1 -Command status
+.\install.ps1 -Command down
 .\install.ps1 -Command doctor
 .\install.ps1 -Command update
 .\install.ps1 -Command uninstall
@@ -120,7 +132,8 @@ Useful commands:
 
 The Windows installer writes under `%LOCALAPPDATA%\opencode-mobile` and
 `%APPDATA%\opencode-mobile\bridge.env`. It restricts the config ACL with
-`icacls` when available.
+`icacls`; setup refuses to write the pairing token if it cannot enforce a
+user-only ACL.
 
 ## Requirements
 

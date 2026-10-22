@@ -67,3 +67,13 @@ jobs:
             -DataDir "$tmp/data" -ConfigFile "$tmp/config/bridge.env"
           test ! -e "$tmp/prefix"
           test ! -e "$tmp/config"
+
+      - name: Setup dry run advertises pairing launchers
+        shell: pwsh
+        run: |
+          $tmp = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString('N'))
+          $out = & ./install.ps1 -Command setup -DryRun -NoColor `
+            -Prefix "$tmp/prefix" -BinDir "$tmp/bin" -WorkDir "$tmp/work" `
+            -DataDir "$tmp/data" -ConfigFile "$tmp/config/bridge.env" 2>&1 | Out-String
+          if ($out -notmatch 'setup/up/down/status launchers') { throw 'Setup dry run did not describe launcher installation' }
+          if (Test-Path -LiteralPath $tmp) { throw 'Dry run unexpectedly wrote files' }

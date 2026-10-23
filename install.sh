@@ -84,6 +84,9 @@ TUNNEL_PID=""
 TMP_DIR=""
 TAILSCALE_SERVE=0
 LOCK_DIR="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/opencode-mobile-${UID:-$(id -u)}.lock"
+SERVICE_UNIT_NAME="opencode-mobile-bridge.service"
+SERVICE_UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+SERVICE_UNIT_FILE="$SERVICE_UNIT_DIR/$SERVICE_UNIT_NAME"
 
 RED=""
 GREEN=""
@@ -394,7 +397,10 @@ resolve_release() {
     TAG="$RELEASE_TAG"
   else
     local json
-    json="$(fetch_text "https://api.github.com/repos/$REPO/releases/latest")"
+    # GitHub's /releases/latest endpoint excludes pre-releases, which would
+    # leave beta users pinned to an older bridge. The first public release is
+    # the newest published release, including pre-releases.
+    json="$(fetch_text "https://api.github.com/repos/$REPO/releases?per_page=1")"
     TAG="$(printf '%s' "$json" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
   fi
   [ -n "${TAG:-}" ] || die "Could not determine the latest release for $REPO"
@@ -931,7 +937,7 @@ quickstart() {
   start_opencode_service
   if [[ "${UI_MINIMAL:-0}" == 1 ]]; then ui_arrow "Starting bridge"; else printf 'Starting bridge…\n'; fi
 
-  local port host token bridge_log tunnel_log tunnel_url connect_url
+  local port host token bridge_log tunnel_log tunnel_url connect_url bridge_managed=0
   port="$(awk -F= '$1 == "PORT" { value=$2 } END { print value }' "$CONFIG_FILE")"
   host="$(awk -F= '$1 == "HOST" { value=$2 } END { print value }' "$CONFIG_FILE")"
   local configured_workdir
@@ -955,19 +961,27 @@ quickstart() {
   fi
 
   if curl -fsS --max-time 1 "http://127.0.0.1:$port/health" >/dev/null 2>&1; then
-    die "Port $port is already serving. Stop the existing bridge, then rerun quickstart."
+    if [ -f "$SERVICE_UNIT_FILE" ] && grep -q '^# Managed by OpenCode Mobile installer\.' "$SERVICE_UNIT_FILE" && managed_service_available && systemctl --user is-active --quiet "$SERVICE_UNIT_NAME" 2>/dev/null; then
+      bridge_managed=1
+      info "Using the already-running OpenCode Mobile bridge service"
+    else
+      die "Port $port is already serving. Stop the existing bridge, then rerun quickstart."
+    fi
   fi
 
   [ -n "$TMP_DIR" ] || TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/opencode-mobile.XXXXXX")"
   bridge_log="$TMP_DIR/bridge.log"
   tunnel_log="$TMP_DIR/cloudflared.log"
-  "$BIN_DIR/opencode-mobile-bridge" >"$bridge_log" 2>&1 &
-  BRIDGE_PID=$!
-  printf '%s\n' "$BRIDGE_PID" > "$LOCK_DIR/bridge.pid"
+  if [ "$bridge_managed" = 0 ]; then
+    "$BIN_DIR/opencode-mobile-bridge" >"$bridge_log" 2>&1 &
+    BRIDGE_PID=$!
+    printf '%s\n' "$BRIDGE_PID" > "$LOCK_DIR/bridge.pid"
+  fi
 
   local attempt health ready=0 opencode_connected=0
+  [ "$bridge_managed" = 1 ] && opencode_connected=1
   for ((attempt = 0; attempt < 45; attempt += 1)); do
-    if ! kill -0 "$BRIDGE_PID" 2>/dev/null; then
+    if [ "$bridge_managed" = 0 ] && ! kill -0 "$BRIDGE_PID" 2>/dev/null; then
       die "Bridge stopped during startup. Start OpenCode and check $CONFIG_FILE."
     fi
     health="$(curl -fsS --max-time 1 "http://127.0.0.1:$port/health" 2>/dev/null || true)"
@@ -1091,6 +1105,16 @@ start_opencode_service() {
 }
 
 status() {
+  local active=0 service_state="unavailable"
+  if [ -f "$SERVICE_UNIT_FILE" ] && grep -q '^# Managed by OpenCode Mobile installer\.' "$SERVICE_UNIT_FILE"; then
+    if managed_service_available; then
+      service_state="$(systemctl --user is-active "$SERVICE_UNIT_NAME" 2>/dev/null || true)"
+      printf 'OpenCode Mobile bridge service: %s\n' "${service_state:-unknown}"
+      [ "$service_state" = active ] && active=1
+    else
+      printf 'OpenCode Mobile bridge service: installed (systemd user manager unavailable)\n'
+    fi
+  fi
   if [ -d "$LOCK_DIR" ]; then
     local pid
     pid="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
@@ -1099,22 +1123,38 @@ status() {
       bridge_pid="$(cat "$LOCK_DIR/bridge.pid" 2>/dev/null || true)"
       tunnel_pid="$(cat "$LOCK_DIR/tunnel.pid" 2>/dev/null || true)"
       printf 'OpenCode Mobile: managed session active (bridge %s, tunnel %s)\n' "${bridge_pid:-starting}" "${tunnel_pid:-none/private}"
-      return 0
+      active=1
+    else
+      printf 'OpenCode Mobile: stale lock (pid %s)\n' "${pid:-unknown}"
     fi
-    printf 'OpenCode Mobile: stale lock (pid %s)\n' "${pid:-unknown}"
-    return 1
   fi
+  if [ "$active" = 1 ]; then return 0; fi
   printf 'OpenCode Mobile: stopped\n'
+  return 1
 }
 
 down() {
-  if [ ! -d "$LOCK_DIR" ]; then info "No managed session is running"; return 0; fi
+  local stopped=0
+  if [ -f "$SERVICE_UNIT_FILE" ] && grep -q '^# Managed by OpenCode Mobile installer\.' "$SERVICE_UNIT_FILE"; then
+    if has_cmd systemctl && systemctl --user show-environment >/dev/null 2>&1; then
+      if systemctl --user is-active --quiet "$SERVICE_UNIT_NAME" 2>/dev/null; then
+        systemctl --user stop "$SERVICE_UNIT_NAME" || die "Could not stop the OpenCode Mobile user service."
+        info "Stopped OpenCode Mobile bridge service"
+        stopped=1
+      fi
+    fi
+  fi
+  if [ ! -d "$LOCK_DIR" ]; then
+    [ "$stopped" = 1 ] || info "No managed session is running"
+    return 0
+  fi
   local pid
   pid="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
   if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
     kill -TERM "$pid" 2>/dev/null || true
     info "Sent stop signal to managed session $pid"
     # The process cleanup handler stops its children and releases the lock.
+    stopped=1
     return 0
   fi
   die "Stale lock found at $LOCK_DIR; verify processes, then remove it manually."
@@ -1132,6 +1172,8 @@ do_setup() {
   need_cmd opencode
   COMMAND="setup"
   install_bridge
+  register_mcp
+  install_managed_service
   if [ "$DRY_RUN" = 1 ]; then
     info "Dry run complete; no installation was performed."
   elif [[ "${UI_MINIMAL:-0}" == 1 ]]; then
@@ -1143,6 +1185,234 @@ do_setup() {
   else
     printf '\nSetup complete. Run: opencode-mobile\n'
   fi
+}
+
+systemd_quote() {
+  local value="$1"
+  case "$value" in *$'\n'*|*$'\r'*) die "Newlines are not allowed in systemd service paths." ;; esac
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//%/%%}"
+  printf '"%s"' "$value"
+}
+
+managed_service_available() {
+  has_cmd systemctl && systemctl --user show-environment >/dev/null 2>&1
+}
+
+install_managed_service() {
+  if [ "$DRY_RUN" = 1 ]; then
+    info "Would install and enable a systemd user service when systemctl --user is available"
+    return 0
+  fi
+  case "$(uname -s)" in Linux) ;; *) info "Persistent system service is available only on Linux; use the foreground launcher on this platform."; return 0 ;; esac
+  if ! managed_service_available; then
+    warn "systemd user manager is unavailable; bridge service was not installed. The foreground opencode-mobile command remains available." >&3
+    return 0
+  fi
+  if [ -e "$SERVICE_UNIT_FILE" ] && ! grep -q '^# Managed by OpenCode Mobile installer\.' "$SERVICE_UNIT_FILE"; then
+    warn "A non-OpenCode-Mobile unit already exists at $SERVICE_UNIT_FILE; leaving it untouched and using foreground mode."
+    return 0
+  fi
+
+  local node_bin opencode_bin path_value unit_tmp
+  node_bin="$(command -v node)"
+  opencode_bin="$(command -v opencode)"
+  [ -x "$node_bin" ] && [ -x "$opencode_bin" ] || {
+    warn "Could not resolve Node.js/OpenCode executables; persistent service was not installed."
+    return 0
+  }
+  path_value="$BIN_DIR:$PATH"
+  mkdir -p "$SERVICE_UNIT_DIR"
+  chmod 700 "$SERVICE_UNIT_DIR" 2>/dev/null || true
+  unit_tmp="$SERVICE_UNIT_FILE.tmp.$$"
+  (
+    umask 077
+    {
+      printf '# Managed by OpenCode Mobile installer. Do not edit.\n'
+      printf '[Unit]\nDescription=OpenCode Mobile local bridge\nAfter=default.target\nStartLimitIntervalSec=300\nStartLimitBurst=30\n\n'
+      printf '[Service]\nType=simple\n'
+      printf 'WorkingDirectory=%s\n' "$(systemd_quote "$WORKDIR")"
+      printf 'Environment=HOME=%s\n' "$(systemd_quote "$HOME")"
+      printf 'Environment=PATH=%s\n' "$(systemd_quote "$path_value")"
+      printf 'ExecStartPre=%s service start\n' "$(systemd_quote "$opencode_bin")"
+      printf 'ExecStart=%s\n' "$(systemd_quote "$BIN_DIR/opencode-mobile-bridge")"
+      printf 'Restart=on-failure\nRestartSec=10s\nUMask=0077\nNoNewPrivileges=true\n\n'
+      printf '[Install]\nWantedBy=default.target\n'
+    } > "$unit_tmp"
+  ) || { rm -f "$unit_tmp"; warn "Could not write the systemd user unit; using foreground mode."; return 0; }
+  chmod 600 "$unit_tmp"
+  mv -f "$unit_tmp" "$SERVICE_UNIT_FILE"
+  if ! systemctl --user daemon-reload || ! systemctl --user enable --now "$SERVICE_UNIT_NAME"; then
+    warn "Could not enable/start the systemd user service; the unit is installed but the foreground launcher remains available." >&3
+    return 0
+  fi
+  ok "Enabled persistent systemd user bridge service"
+}
+
+remove_managed_service() {
+  [ -f "$SERVICE_UNIT_FILE" ] || return 0
+  if ! grep -q '^# Managed by OpenCode Mobile installer\.' "$SERVICE_UNIT_FILE"; then
+    warn "Leaving unowned service unit untouched: $SERVICE_UNIT_FILE"
+    return 0
+  fi
+  if [ "$DRY_RUN" = 1 ]; then
+    info "Would stop, disable, and remove the OpenCode Mobile user service"
+    return 0
+  fi
+  managed_service_available || die "Cannot reach the user service manager; start a user session and retry uninstall so the bridge can be stopped safely."
+  systemctl --user disable --now "$SERVICE_UNIT_NAME" >/dev/null 2>&1 || die "Could not stop/disable the OpenCode Mobile user service; installation was left intact."
+  systemctl --user daemon-reload >/dev/null 2>&1 || die "Could not reload the user service manager; installation was left intact."
+  local wanted_link="$SERVICE_UNIT_DIR/default.target.wants/$SERVICE_UNIT_NAME"
+  if [ -L "$wanted_link" ] && [ "$(readlink "$wanted_link" 2>/dev/null || true)" = "../$SERVICE_UNIT_NAME" ]; then
+    rm -f "$wanted_link"
+  fi
+  rm -f "$SERVICE_UNIT_FILE"
+  ok "Removed OpenCode Mobile user service unit"
+}
+
+register_mcp() {
+  if [ "$DRY_RUN" = 1 ]; then
+    info "Would register the local opencode-mobile MCP server in the global OpenCode config (without bridge credentials)"
+    return 0
+  fi
+  need_cmd opencode
+  [ -x "$BIN_DIR/opencode-mobile-bridge" ] || die "Bridge launcher is missing; cannot register MCP."
+
+  local port
+  port="$(awk -F= '$1 == "PORT" { value=$2; gsub(/["[:space:]]/, "", value) } END { print value }' "$CONFIG_FILE")"
+  [ -n "$port" ] || port=8787
+  case "$port" in *[!0-9]*) die "Invalid bridge PORT; refusing to register MCP." ;; esac
+  [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || die "Invalid bridge PORT; refusing to register MCP."
+
+  # Delegate JSON/JSONC editing to the installed OpenCode CLI. The MCP process
+  # receives only the non-secret port; it launches directly with Node rather
+  # than through the bridge launcher, so bridge.env is never loaded.
+  local config_dir config_file entry node_bin
+  config_dir="$(opencode debug paths config 2>/dev/null || true)"
+  [ -n "$config_dir" ] || config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
+  entry="$PREFIX/bridge/current/dist/index.js"
+  for config_file in "$config_dir/opencode.json" "$config_dir/opencode.jsonc"; do
+    [ -f "$config_file" ] || continue
+    if grep -Eq '"opencode-mobile"[[:space:]]*:' "$config_file" && ! grep -Fq "\"$entry\"" "$config_file"; then
+      warn "The global MCP name opencode-mobile is already used by another command; leaving it untouched. Choose another name before setup to register this integration."
+      return 0
+    fi
+  done
+  node_bin="$(command -v node)"
+  opencode mcp add --global --env "PORT=$port" opencode-mobile -- "$node_bin" "$entry" mcp
+  ok "Registered local OpenCode Mobile MCP server (reload OpenCode to activate it)"
+}
+
+unregister_mcp() {
+  if [ "$DRY_RUN" = 1 ]; then
+    info "Would remove only the OpenCode Mobile-owned MCP entry from OpenCode global config"
+    return 0
+  fi
+  local config_dir="" entry file result
+  if has_cmd opencode; then config_dir="$(opencode debug paths config 2>/dev/null || true)"; fi
+  [ -n "$config_dir" ] || config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
+  entry="$PREFIX/bridge/current/dist/index.js"
+  for file in "$config_dir/opencode.json" "$config_dir/opencode.jsonc"; do
+    [ -f "$file" ] || continue
+    result="$(node - "$file" "$entry" <<'NODE'
+const fs = require('node:fs');
+const path = require('node:path');
+const file = process.argv[2];
+const expectedEntry = process.argv[3];
+const source = fs.readFileSync(file, 'utf8');
+let i = 0;
+function trivia() {
+  for (;;) {
+    while (/\s/.test(source[i] || '')) i++;
+    if (source.slice(i, i + 2) === '//') { i += 2; while (i < source.length && source[i] !== '\n') i++; continue; }
+    if (source.slice(i, i + 2) === '/*') { const end = source.indexOf('*/', i + 2); if (end < 0) throw Error('unterminated comment'); i = end + 2; continue; }
+    return;
+  }
+}
+function string() {
+  const start = i++;
+  while (i < source.length) {
+    if (source[i] === '\\') { i += 2; continue; }
+    if (source[i++] === '"') return { value: JSON.parse(source.slice(start, i)), start, end: i };
+  }
+  throw Error('unterminated string');
+}
+function value() {
+  trivia();
+  const start = i;
+  if (source[i] === '"') { const s = string(); return { kind: 'string', value: s.value, start, end: i }; }
+  if (source[i] === '{') {
+    i++; const props = []; trivia();
+    while (source[i] !== '}') {
+      const key = string(); trivia(); if (source[i++] !== ':') throw Error('expected colon');
+      const child = value(); trivia(); let comma = null;
+      if (source[i] === ',') { comma = i++; trivia(); }
+      props.push({ key: key.value, start: key.start, child, comma });
+      if (comma === null && source[i] !== '}') throw Error('expected object delimiter');
+    }
+    i++; return { kind: 'object', props, start, end: i };
+  }
+  if (source[i] === '[') {
+    i++; const items = []; trivia();
+    while (source[i] !== ']') {
+      items.push(value()); trivia();
+      if (source[i] === ',') { i++; trivia(); } else if (source[i] !== ']') throw Error('expected array delimiter');
+    }
+    i++; return { kind: 'array', items, start, end: i };
+  }
+  const match = /^(?:true|false|null|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)/.exec(source.slice(i));
+  if (!match) throw Error('invalid JSONC value');
+  i += match[0].length;
+  return { kind: 'literal', value: JSON.parse(match[0]), start, end: i };
+}
+function prop(node, name) { return node?.kind === 'object' ? node.props.find(p => p.key === name)?.child : undefined; }
+function plain(node) {
+  if (node?.kind === 'string' || node?.kind === 'literal') return node.value;
+  if (node?.kind === 'array') return node.items.map(plain);
+  if (node?.kind === 'object') return Object.fromEntries(node.props.map(p => [p.key, plain(p.child)]));
+  return undefined;
+}
+try {
+  const root = value(); trivia();
+  if (i !== source.length || root.kind !== 'object') throw Error('invalid config root');
+  const servers = prop(prop(root, 'mcp'), 'servers');
+  if (servers?.kind !== 'object') { process.stdout.write('none'); process.exit(0); }
+  const matches = servers.props.filter(p => p.key === 'opencode-mobile');
+  if (matches.length === 0) { process.stdout.write('none'); process.exit(0); }
+  if (matches.length !== 1) throw Error('ambiguous MCP entry');
+  const owned = plain(matches[0].child);
+  const command = owned?.command;
+  if (owned?.type !== 'local' || !Array.isArray(command) || command[1] !== expectedEntry || command.at(-1) !== 'mcp') {
+    process.stdout.write('not-owned'); process.exit(0);
+  }
+  const member = matches[0];
+  const index = servers.props.indexOf(member);
+  let from = member.start;
+  let to = member.child.end;
+  if (member.comma !== null) to = member.comma + 1;
+  else if (index > 0) from = servers.props[index - 1].comma;
+  const updated = source.slice(0, from) + source.slice(to);
+  const stat = fs.statSync(file);
+  const backup = `${file}.opencode-mobile.bak.${Date.now()}`;
+  fs.copyFileSync(file, backup, fs.constants.COPYFILE_EXCL);
+  fs.chmodSync(backup, stat.mode & 0o777);
+  const temp = path.join(path.dirname(file), `.${path.basename(file)}.tmp.${process.pid}`);
+  fs.writeFileSync(temp, updated, { mode: stat.mode & 0o777 });
+  fs.chmodSync(temp, stat.mode & 0o777);
+  fs.renameSync(temp, file);
+  process.stdout.write('removed');
+} catch (error) {
+  console.error(`Could not safely update OpenCode config: ${error instanceof Error ? error.message : 'parse error'}`);
+  process.exit(2);
+}
+NODE
+)" || die "Could not safely remove the owned OpenCode Mobile MCP entry. OpenCode config and installed files were left in place."
+    case "$result" in
+      removed) ok "Removed OpenCode Mobile MCP entry (backup retained beside OpenCode config)" ;;
+      not-owned) warn "The opencode-mobile MCP name is not owned by this installer; leaving it untouched." ;;
+    esac
+  done
 }
 
 persist_installer() {
@@ -1260,7 +1530,11 @@ uninstall_all() {
       info "Would remove $PREFIX/bridge"
       info "Would remove $BIN_DIR/opencode-mobile-bridge"
       info "Would remove opencode-mobile commands and the installer launcher"
+      remove_managed_service
+      unregister_mcp
     else
+      remove_managed_service
+      unregister_mcp
       rm -rf "$PREFIX/bridge"
       rm -f "$BIN_DIR/opencode-mobile-bridge" "$BIN_DIR/opencode-mobile-up" "$BIN_DIR/opencode-mobile-down" "$BIN_DIR/opencode-mobile-apk" "$BIN_DIR/opencode-mobile" "$BIN_DIR/opencode-mobile-installer"
       ok "Removed bridge files"

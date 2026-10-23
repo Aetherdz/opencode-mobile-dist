@@ -17,14 +17,18 @@ binaries are attached to that repository's GitHub Releases.
 - Optionally downloads and installs the Android APK through `adb`.
 - Verifies every downloaded asset against the release `SHA256SUMS`.
 - Provides `doctor`, `update`, and `uninstall` commands.
+- During `setup`, registers a local stdio MCP server named `opencode-mobile`
+  using the installed OpenCode CLI. It exposes only `mobile_status`; reload
+  OpenCode after setup to load it. The MCP configuration contains the bridge
+  port and executable path, not the pairing token or OpenCode password.
 - On Linux/macOS, prints a phone pairing QR, URL, and token on startup (QR
   rendering requires `qrencode`).
 - On Windows, `setup` creates `setup`, `up`, `down`, and `status` launchers;
   pairing runs in the foreground and is stopped with Ctrl+C.
 
-The application release currently linked by the website and installer is
-`1.0.0-beta.3` (pre-release). It includes the Android APK and bridge/web
-bundles with `SHA256SUMS`. No newer application release is published yet.
+The application release currently linked by the website is
+`1.0.0-beta.3` (pre-release); beta.4 is being prepared separately. Releases
+include the Android APK and bridge/web bundles with `SHA256SUMS`.
 
 The bridge listens on `127.0.0.1:8787` by default. Remote access is expected to
 go through Tailscale or a reverse proxy; see the main repository's deployment
@@ -53,8 +57,20 @@ inspect it, then run `bash install.sh setup`.
 `SHA256SUMS`, creates `$HOME/projects` if missing, and preserves an existing
 token/config. It repairs missing command launchers without reinstalling an
 existing bridge. It never uses the entire home directory as a workdir.
-`opencode-mobile` starts OpenCode and the bridge, checks health, and creates a public
-temporary Cloudflare Quick Tunnel after explicit confirmation each run. Once
+By default the installer selects the newest published release, including
+pre-releases, so beta setups do not silently install an older release. Pin a
+version explicitly with `--release v1.0.0-beta.4` when needed.
+It also registers the local MCP status tool through `opencode mcp add --global`;
+repeat setup to refresh that entry after an update. MCP currently reports local
+bridge health only; it does not start the bridge. On Linux, if a usable
+`systemd --user` manager is available, setup enables a restricted user service
+for the bridge. The service is automatically started at user login, but it does
+not keep a public tunnel alive or provide a stable public URL. Other platforms
+continue to use the foreground bridge launcher.
+`opencode-mobile` starts or reuses OpenCode and the bridge, checks health, and creates a public
+temporary Cloudflare Quick Tunnel after explicit confirmation each run. The
+Quick Tunnel remains attached to that foreground invocation and its hostname
+can change after restart. Once
 ready, it prints the bridge URL and pairing token and displays a QR payload that
 the app scans to fill both fields automatically. You can also enter the URL and
 token manually. Use `opencode-mobile --copy-pairing` (or `--copy`) to copy the
@@ -97,6 +113,14 @@ The installer writes:
 | `~/.local/bin/opencode-mobile-bridge` | Launcher |
 | `~/.config/opencode-mobile/bridge.env` | Token and bridge configuration |
 
+On Linux, uninstall removes the `opencode-mobile` MCP entry only when its
+configured command points to this installation; it creates a permission-preserving
+backup of the OpenCode JSON/JSONC file first. A same-named entry pointing elsewhere
+is left untouched. If the OpenCode CLI is unavailable, cleanup falls back to
+the standard XDG config path. Windows MCP cleanup is not implemented yet;
+remove the matching `opencode-mobile` entry manually before uninstalling if it
+should be removed. The Windows service lifecycle also remains incomplete.
+
 If `~/.local/bin` is not in `PATH`, the installer prints the exact launcher
 path. Add it to `PATH` or call the launcher directly.
 
@@ -106,8 +130,9 @@ Windows 10 or newer with PowerShell 5.1 or later. Setup installs and verifies
 the bridge, creates launchers, and generates a protected pairing config. Pairing
 uses a temporary public Cloudflare Quick Tunnel. Install Node.js 22+ and
 `cloudflared` from its official download page before starting; `adb` is required
-only for optional APK installation. Windows has passed PowerShell parsing and
-dry-run CI checks; a real Windows runtime test is still required.
+only for optional APK installation. Windows runtime validation was not
+available for this release; the Windows service lifecycle and MCP cleanup are
+incomplete. Use the foreground launcher and stop it with Ctrl+C.
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass

@@ -268,7 +268,10 @@ function Resolve-Release {
             "Accept" = "application/vnd.github+json"
         }
         try {
-            $latest = Invoke-RestMethod -Uri "https://api.github.com/repos/$($script:Repo)/releases/latest" -Headers $headers
+            # /releases/latest excludes pre-releases, which would strand beta
+            # users on an older bridge. The first public release is newest.
+            $releases = @(Invoke-RestMethod -Uri "https://api.github.com/repos/$($script:Repo)/releases?per_page=1" -Headers $headers)
+            $latest = $releases | Select-Object -First 1
         } catch {
             Die "Could not read the latest release for $($script:Repo): $($_.Exception.Message)"
         }
@@ -567,6 +570,31 @@ foreach ($line in Get-Content -LiteralPath $config) {
     } elseif ($line -notmatch '^\s*(#.*)?$') {
         throw "Config contains an invalid line"
     }
+}
+
+function Register-McpServer {
+    if ($DryRun) {
+        Write-Info "Would register the local OpenCode Mobile MCP server without bridge credentials"
+        return
+    }
+    if (-not (Has-Command "opencode")) {
+        Write-Warn "OpenCode CLI is not installed; MCP registration was skipped. Rerun setup after installing it."
+        return
+    }
+    $port = "8787"
+    if (Test-Path -LiteralPath $script:ConfigFile -PathType Leaf) {
+        foreach ($line in Get-Content -LiteralPath $script:ConfigFile) {
+            if ($line -match '^PORT=(\d{1,5})$') { $port = $Matches[1]; break }
+        }
+    }
+    if ([int]$port -lt 1 -or [int]$port -gt 65535) { Die "Bridge port is invalid; refusing to register MCP." }
+    $node = (Get-Command node -ErrorAction Stop).Source
+    $bridgeEntry = Join-Path $script:Prefix "bridge\current\dist\index.js"
+    if (-not (Test-Path -LiteralPath $bridgeEntry -PathType Leaf)) { Die "Bridge entry point is missing; cannot register MCP." }
+    $arguments = @("mcp", "add", "--global", "--env", "PORT=$port", "opencode-mobile", "--", $node, $bridgeEntry, "mcp")
+    & opencode @arguments
+    if ($LASTEXITCODE -ne 0) { Die "OpenCode MCP registration failed (exit $LASTEXITCODE)." }
+    Write-Ok "Registered local OpenCode Mobile MCP server (reload OpenCode to activate it)"
 }
 foreach ($key in $requiredKeys) { if (-not $configValues.ContainsKey($key)) { throw "Config is missing required fields" } }
 if (($configValues.ContainsKey("OPENCODE_URL") -xor $configValues.ContainsKey("OPENCODE_PASSWORD"))) { throw "OPENCODE_URL and OPENCODE_PASSWORD must be set together" }
@@ -1086,6 +1114,7 @@ function Invoke-Main {
                 Write-Warn "OpenCode CLI is not installed. Install it before running opencode-mobile.cmd."
                 break
             }
+            Register-McpServer
             Write-Ok "Setup complete. Run opencode-mobile.cmd to start and pair your phone."
         }
         "up" {

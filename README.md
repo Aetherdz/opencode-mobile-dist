@@ -26,9 +26,10 @@ binaries are attached to that repository's GitHub Releases.
 - On Windows, `setup` creates `setup`, `up`, `down`, and `status` launchers;
   pairing runs in the foreground and is stopped with Ctrl+C.
 
-The application release currently linked by the website is
-`1.0.0-beta.3` (pre-release); beta.4 is being prepared separately. Releases
-include the Android APK and bridge/web bundles with `SHA256SUMS`.
+The website download card remains on `1.0.0-beta.3` while the owner tests the
+new **`1.0.0-beta.4`** pre-release. Its bridge and web bundles are published;
+the release-signed Android APK will be attached after the build and signing
+checks complete. Releases include `SHA256SUMS`.
 
 The bridge listens on `127.0.0.1:8787` by default. Remote access is expected to
 go through Tailscale or a reverse proxy; see the main repository's deployment

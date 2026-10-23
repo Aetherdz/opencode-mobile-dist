@@ -44,7 +44,7 @@ if [[ -t 1 && -z "${NO_COLOR:-}" && "${TERM:-dumb}" != dumb && "${NO_COLOR_FLAG:
   UI_WHITE=$'\033[37m'; UI_BOLD=$'\033[1m'; UI_RESET=$'\033[0m'
 fi
 
-INSTALLER_VERSION="0.3.1"
+INSTALLER_VERSION="0.3.2"
 DEFAULT_REPO="Aetherdz/opencode-mobile"
 DEFAULT_PREFIX="${XDG_DATA_HOME:-$HOME/.local/share}/opencode-mobile"
 DEFAULT_BIN_DIR="$HOME/.local/bin"
@@ -207,6 +207,16 @@ qr_output() {
   local value="$1"
   if has_cmd qrencode; then
     printf '%s' "$value" | qrencode -t ANSIUTF8
+  elif [ -d "$PREFIX/bridge/current/node_modules/qrcode-terminal" ]; then
+    # qrcode-terminal is bundled with the checksum-verified bridge release,
+    # so QR output works on stock Linux/macOS hosts without a system package.
+    printf '%s' "$value" | node -e '
+      const qr = require(process.argv[1]);
+      let payload = "";
+      process.stdin.setEncoding("utf8");
+      process.stdin.on("data", (chunk) => { payload += chunk; });
+      process.stdin.on("end", () => qr.generate(payload, { small: true }));
+    ' "$PREFIX/bridge/current/node_modules/qrcode-terminal"
   else
     printf 'QR code unavailable (install qrencode with your package manager); use the URL and token above.\n'
   fi
@@ -572,22 +582,19 @@ install_bridge() {
       return 0
     fi
     if [ "$SETUP_COMMAND" = 1 ]; then
+      # Refresh the persisted installer on setup even when the bridge itself is
+      # already installed. This is how fixes to quickstart reach existing users.
+      persist_installer
       # Repair launchers independently: the bridge can already be present while
-      # a user removed just the primary command. setup's source must be saved
-      # before generating launchers that call the saved installer.
+      # a user removed just the primary command.
       if [ ! -x "$BIN_DIR/opencode-mobile" ]; then
         mkdir -p "$BIN_DIR"
-        persist_installer
         cat > "$BIN_DIR/opencode-mobile" <<EOF
 #!/usr/bin/env sh
 set -eu
 exec "$BIN_DIR/opencode-mobile-installer" up "\$@"
 EOF
         chmod 755 "$BIN_DIR/opencode-mobile"
-      fi
-      if [ ! -x "$BIN_DIR/opencode-mobile-installer" ] || [ ! -x "$PREFIX/installer" ]; then
-        mkdir -p "$BIN_DIR"
-        persist_installer
       fi
       if [ ! -x "$BIN_DIR/opencode-mobile-bridge" ]; then
         mkdir -p "$BIN_DIR"
@@ -911,22 +918,52 @@ install_cloudflared() {
 }
 
 quickstart() {
+  # Some terminal wrappers launch the persisted installer with fd 3 closed.
+  # Pairing details are deliberately written to this user-visible descriptor;
+  # rebind it before any quickstart output so the tunnel can never be left
+  # running without showing its URL and token.
+  if ! { : >&3; } 2>/dev/null; then exec 3>&1; fi
   check_node
   require_sha_tool
   need_cmd curl
   if [ "$DRY_RUN" = 1 ]; then
     step "Quickstart plan"
-    info "Would install and verify the bridge release"
+    info "Would check the latest bridge release and update an outdated installation"
     info "Would prepare a private mode-600 config and local pairing token"
     info "Would start OpenCode and bridge, prefer private persistent Tailscale Serve, or create a public temporary Quick Tunnel only after explicit consent"
-    info "Would print the connection URL/token and render a scannable QR when qrencode is available"
+    info "Would print the connection URL/token and render a scannable QR from the bundled renderer"
     [ "$COPY_PAIRING" = 1 ] && info "Would try to copy the QR connection payload to a supported clipboard"
     return 0
   fi
 
   QUIET=1
   if [[ "${UI_MINIMAL:-0}" == 1 ]]; then QUIET=0; fi
-  install_bridge
+  # A quickstart must not silently reuse an older install that lacks routes
+  # used by the app (for example GET /models). Resolve the current published
+  # version and refresh only when the installed bridge is outdated; config and
+  # its existing AUTH_TOKEN/ALLOWED_WORKDIRS remain untouched.
+  local installed_version=""
+  if [ -L "$PREFIX/bridge/current" ]; then
+    installed_version="$(readlink "$PREFIX/bridge/current" 2>/dev/null || true)"
+    installed_version="${installed_version##*/}"
+  fi
+  resolve_release
+  if [ "$installed_version" != "$VERSION_NUM" ]; then
+    local original_command="$COMMAND"
+    COMMAND=update
+    install_bridge
+    COMMAND="$original_command"
+    # Recycle only this installer's own managed service so it loads the new
+    # verified release before the public tunnel is attached.
+    if [ -f "$SERVICE_UNIT_FILE" ] &&
+      grep -q '^# Managed by OpenCode Mobile installer\.' "$SERVICE_UNIT_FILE" &&
+      managed_service_available &&
+      systemctl --user is-active --quiet "$SERVICE_UNIT_NAME" 2>/dev/null; then
+      systemctl --user restart "$SERVICE_UNIT_NAME" || die "Updated bridge installed, but its managed service could not be restarted."
+    fi
+  else
+    install_bridge
+  fi
   QUIET=0
   [ -t 0 ] || die "up requires a terminal to show the local pairing details."
   local answer mode="cloudflare" tailscale_dns=""
@@ -1075,15 +1112,15 @@ quickstart() {
   qr_payload="$(node -e 'const u=new URL("opencode-mobile://connect");u.searchParams.set("url",process.argv[1]);u.searchParams.set("token",process.argv[2]);process.stdout.write(u.toString())' "$connect_url" "$token")"
   if [[ "${UI_MINIMAL:-0}" == 1 ]]; then
     printf '\nScan this code in OpenCode Mobile:\n' >&3
-    if has_cmd qrencode; then
-      printf '%s' "$qr_payload" | qrencode -t ANSIUTF8 >&3 2>/dev/null || printf '  Could not render QR; enter the URL and pairing token manually.\n' >&3
+    if has_cmd qrencode || [ -d "$PREFIX/bridge/current/node_modules/qrcode-terminal" ]; then
+      qr_output "$qr_payload" >&3 2>/dev/null || printf '  Could not render QR; enter the URL and pairing token manually.\n' >&3
     else
       printf '  QR unavailable: install qrencode; enter the URL and pairing token shown above manually.\n' >&3
     fi
   else
     printf '\nScan this code in OpenCode Mobile:\n' >&3
     qr_output "$qr_payload" >&3
-    if ! has_cmd qrencode; then printf '  QR unavailable: install qrencode; URL and token above can be entered manually.\n' >&3; fi
+    if ! has_cmd qrencode && [ ! -d "$PREFIX/bridge/current/node_modules/qrcode-terminal" ]; then printf '  URL and token above can be entered manually.\n' >&3; fi
   fi
   if [ "$COPY_PAIRING" = 1 ]; then
     if has_cmd termux-clipboard-set; then

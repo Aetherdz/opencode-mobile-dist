@@ -21,6 +21,10 @@ RUNTIME_HOME="$WORK/runtime"
 TEST_HOME="$WORK/home"
 
 mkdir -p "$RELEASE_DIR" "$FAKE_BIN" "$WORK/bundle/dist" "$WORK/bundle/node_modules" "$WORKDIR" "$STATE_HOME" "$RUNTIME_HOME" "$TEST_HOME"
+mkdir -p "$WORK/bundle/node_modules/qrcode-terminal"
+cat > "$WORK/bundle/node_modules/qrcode-terminal/index.js" <<'EOF'
+exports.generate = (payload) => process.stdout.write(`QR:${payload}\n`);
+EOF
 
 cat > "$WORK/bundle/package.json" <<'EOF'
 {"name":"bridge-fixture","version":"1.0.0"}
@@ -116,6 +120,9 @@ test -x "$BIN_DIR/opencode-mobile-bridge"
 test -f "$CONFIG_HOME/opencode-mobile/bridge.env"
 test "$(stat -c '%a' "$CONFIG_HOME/opencode-mobile/bridge.env")" = "600"
 test "$(awk -F= '/^AUTH_TOKEN=/{print length($2)}' "$CONFIG_HOME/opencode-mobile/bridge.env")" -ge 32
+sed '$d' "$ROOT_DIR/install.sh" > "$WORK/install-functions.sh"
+qr_output="$(bash -c 'source "$1"; PREFIX="$2"; qr_output "fixture://pair"' _ "$WORK/install-functions.sh" "$PREFIX")"
+grep -q '^QR:fixture://pair$' <<<"$qr_output"
 test -x "$BIN_DIR/opencode-mobile-installer"
 test -x "$PREFIX/installer"
 cat > "$FAKE_BIN/opencode" <<'EOF'
@@ -350,7 +357,11 @@ export XDG_CONFIG_HOME="$CONFIG_HOME" XDG_DATA_HOME="$DATA_HOME"
 before="$(awk -F= '/^AUTH_TOKEN=/{print $2}' "$CONFIG_HOME/opencode-mobile/bridge.env")"
 cp "$CONFIG_HOME/opencode-mobile/bridge.env" "$WORK/config.before-setup"
 chmod 644 "$CONFIG_HOME/opencode-mobile/bridge.env"
+printf '# stale installer placeholder\n' > "$BIN_DIR/opencode-mobile-installer"
+chmod 755 "$BIN_DIR/opencode-mobile-installer"
 "$ROOT_DIR/install.sh" setup --workdir "$WORKDIR" --prefix "$PREFIX" --bin-dir "$BIN_DIR" --no-color
+cmp "$ROOT_DIR/install.sh" "$BIN_DIR/opencode-mobile-installer"
+cmp "$ROOT_DIR/install.sh" "$PREFIX/installer"
 test "$(stat -c '%a' "$CONFIG_HOME/opencode-mobile/bridge.env")" = "600"
 cmp "$WORK/config.before-setup" "$CONFIG_HOME/opencode-mobile/bridge.env"
 after="$(awk -F= '/^AUTH_TOKEN=/{print $2}' "$CONFIG_HOME/opencode-mobile/bridge.env")"
@@ -363,7 +374,14 @@ test -f "$SYSTEMCTL_STATE"
 "$ROOT_DIR/install.sh" quickstart --dry-run --yes --workdir "$WORKDIR" --prefix "$PREFIX" --bin-dir "$BIN_DIR" --no-color
 "$ROOT_DIR/install.sh" up --dry-run --yes --workdir "$WORKDIR" --prefix "$PREFIX" --bin-dir "$BIN_DIR" --no-color
 "$ROOT_DIR/install.sh" up --dry-run --copy-pairing --workdir "$WORKDIR" --prefix "$PREFIX" --bin-dir "$BIN_DIR" --no-color
-"$ROOT_DIR/install.sh" version --no-color | grep -q '0.3.1'
+fd3_output="$WORK/quickstart-closed-fd3.log"
+"$ROOT_DIR/install.sh" quickstart --dry-run --yes --workdir "$WORKDIR" --prefix "$PREFIX" --bin-dir "$BIN_DIR" --no-color 3>&- >"$fd3_output" 2>&1
+grep -q 'check the latest bridge release' "$fd3_output"
+if grep -q 'Bad file descriptor' "$fd3_output"; then
+  echo "quickstart failed to recover its pairing output descriptor" >&2
+  exit 1
+fi
+"$ROOT_DIR/install.sh" version --no-color | grep -q '0.3.2'
 "$ROOT_DIR/install.sh" status --prefix "$PREFIX" --bin-dir "$BIN_DIR" --no-color | grep -q 'bridge service: active'
 if "$ROOT_DIR/install.sh" install --workdir "$HOME" --prefix "$WORKDIR/prefix" --bin-dir "$WORKDIR/bin" --no-color >/dev/null 2>&1; then
   echo "expected refusal of home directory as workdir" >&2

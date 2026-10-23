@@ -21,8 +21,8 @@ binaries are attached to that repository's GitHub Releases.
   using the installed OpenCode CLI. It exposes only `mobile_status`; reload
   OpenCode after setup to load it. The MCP configuration contains the bridge
   port and executable path, not the pairing token or OpenCode password.
-- On Linux/macOS, prints a phone pairing QR, URL, and token on startup (QR
-  rendering requires `qrencode`).
+- On Linux/macOS, prints a phone pairing QR, URL, and token on startup. QR
+  rendering uses the checksum-verified bridge bundle; `qrencode` is optional.
 - On Windows, `setup` creates `setup`, `up`, `down`, and `status` launchers;
   pairing runs in the foreground and is stopped with Ctrl+C.
 
@@ -190,8 +190,9 @@ user-only ACL.
 - Android platform tools (`adb`) for APK installation.
 - `cloudflared` for the Linux/macOS temporary public-tunnel pairing flow; the
   installer can install a checksum-verified binary where supported.
-- `qrencode` for a terminal-rendered QR code. Without it, the bridge URL and
-  token are printed for manual entry.
+- `qrencode` is optional; the installer falls back to the QR renderer bundled
+  with the checksum-verified Bridge release. URL and token remain available for
+  manual entry if terminal rendering fails.
 - A reachable OpenCode service. The bridge discovers the local service file
   automatically, or you can set `OPENCODE_URL` and `OPENCODE_PASSWORD` in the
   config file.

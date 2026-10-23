@@ -29,18 +29,11 @@ ui_logo() {
   printf '%sOpenCode Mobile · %s%s\n' "${UI_DIM:-}" "$version" "${UI_RESET:-}" >&3
 }
 
-# When invoked through `bash -s`, stdin is the only copy of the installer.
-if [[ "${1:-}" == setup && "${OPENCODE_MOBILE_STDIN_CAPTURED:-}" != 1 && ( "$0" == bash || "$0" == -bash || ! -f "$0" ) ]]; then
-  UI_STREAM_SOURCE="$(mktemp "${TMPDIR:-/tmp}/opencode-mobile-installer.XXXXXX")"
-  chmod 600 "$UI_STREAM_SOURCE" 2>/dev/null || true
-  cat >"$UI_STREAM_SOURCE"
-  export OPENCODE_MOBILE_INSTALLER_SOURCE="$UI_STREAM_SOURCE"
-  export OPENCODE_MOBILE_STDIN_CAPTURED=1
-  exec bash -c 'source="$1"; shift; export OPENCODE_MOBILE_INSTALLER_SOURCE="$source" OPENCODE_MOBILE_STDIN_CAPTURED=1; source "$source" "$@"' opencode-mobile-stream "$UI_STREAM_SOURCE" "$@" < /dev/null
-fi
-
-if [[ "${OPENCODE_MOBILE_STDIN_CAPTURED:-}" == 1 && "$0" == */opencode-mobile-installer.* ]]; then
-  export OPENCODE_MOBILE_INSTALLER_SOURCE="$0"
+# Bash may pre-buffer piped script input, so it cannot be safely copied back
+# from stdin for persistent installation. Require a downloaded, inspectable file.
+if [[ "${1:-}" == setup && ( "$0" == bash || "$0" == -bash || ! -f "$0" ) ]]; then
+  printf '%s\n' "ERROR: Do not pipe this installer into bash. Download it to a temporary file, then run: bash <file> setup" >&2
+  exit 1
 fi
 
 # Keep setup UI colors separate from the installer command's existing colors.
@@ -87,6 +80,7 @@ LOCK_DIR="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/opencode-mobile-${UID:-$(id -u)}.l
 SERVICE_UNIT_NAME="opencode-mobile-bridge.service"
 SERVICE_UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 SERVICE_UNIT_FILE="$SERVICE_UNIT_DIR/$SERVICE_UNIT_NAME"
+TAILSCALE_STATE_FILE="$CONFIG_DIR/tailscale-serve.env"
 
 RED=""
 GREEN=""
@@ -165,7 +159,7 @@ Usage:
 Commands:
   install       Install the bridge (default) and optionally the Android app.
   setup         Install/configure once; preserves existing token and settings.
-  up            Start OpenCode and bridge, then create a temporary public link.
+  up            Start OpenCode and bridge; prefer persistent private Tailscale Serve.
   down          Stop services started by this tool and release its lock.
   status        Show a short local service status.
   apk           Verify and display the latest Android APK URL and SHA-256.
@@ -348,6 +342,34 @@ fetch_text() {
   fi
 }
 
+download_with_spinner() {
+  local url="$1" dest="$2" label pid frame=0 rc
+  label="${url##*/}"
+  if has_cmd curl; then
+    curl -fsSL --retry 3 --proto '=https' --tlsv1.2 -o "$dest" "$url" >/dev/null 2>&1 &
+  else
+    wget -q --https-only -O "$dest" "$url" >/dev/null 2>&1 &
+  fi
+  pid=$!
+  local -a frames=('▱▱▱▱' '▰▱▱▱' '▰▰▱▱' '▰▰▰▱' '▰▰▰▰' '▱▰▰▰' '▱▱▰▰' '▱▱▱▰')
+  [[ -t 3 ]] && printf '\033[?25l' >&3
+  while kill -0 "$pid" 2>/dev/null; do
+    printf '\r\033[K%s→ Downloading%s %s %s' "$UI_CYAN" "$UI_RESET" "$label" "${frames[$frame]}" >&3
+    frame=$(( (frame + 1) % ${#frames[@]} ))
+    sleep 0.12
+  done
+  if wait "$pid"; then
+    [[ -t 3 ]] && printf '\033[?25h' >&3
+    printf '\r\033[K%s✓ Downloaded%s %s\n' "$UI_GREEN" "$UI_RESET" "$label" >&3
+    return 0
+  else
+    rc=$?
+    [[ -t 3 ]] && printf '\033[?25h' >&3
+    printf '\r\033[K%s✗ Download failed%s %s\n' "$UI_RED" "$UI_RESET" "$label" >&3
+    return "$rc"
+  fi
+}
+
 download_file() {
   local url="$1"
   local dest="$2"
@@ -355,12 +377,20 @@ download_file() {
     if [ "$QUIET" = 1 ]; then
       curl -fsSL --retry 3 --proto '=https' --tlsv1.2 -o "$dest" "$url"
     elif [[ "${UI_MINIMAL:-0}" == 1 ]]; then
-      curl -fsSL --retry 3 --proto '=https' --tlsv1.2 -o "$dest" "$url" >/dev/null 2>&1
+      if [[ -t 3 ]]; then
+        download_with_spinner "$url" "$dest"
+      else
+        curl -fsSL --retry 3 --proto '=https' --tlsv1.2 -o "$dest" "$url" >/dev/null 2>&1
+      fi
     else
       curl -fL --retry 3 --proto '=https' --tlsv1.2 --progress-bar -o "$dest" "$url"
     fi
   elif has_cmd wget; then
-    wget -q --https-only -O "$dest" "$url"
+    if [[ "${UI_MINIMAL:-0}" == 1 && -t 3 ]]; then
+      download_with_spinner "$url" "$dest"
+    else
+      wget -q --https-only -O "$dest" "$url"
+    fi
   else
     die "Need curl or wget"
   fi
@@ -888,7 +918,7 @@ quickstart() {
     step "Quickstart plan"
     info "Would install and verify the bridge release"
     info "Would prepare a private mode-600 config and local pairing token"
-    info "Would start OpenCode and bridge, create a public temporary Quick Tunnel after explicit consent"
+    info "Would start OpenCode and bridge, prefer private persistent Tailscale Serve, or create a public temporary Quick Tunnel only after explicit consent"
     info "Would print the connection URL/token and render a scannable QR when qrencode is available"
     [ "$COPY_PAIRING" = 1 ] && info "Would try to copy the QR connection payload to a supported clipboard"
     return 0
@@ -899,21 +929,33 @@ quickstart() {
   install_bridge
   QUIET=0
   [ -t 0 ] || die "up requires a terminal to show the local pairing details."
-  if [[ "${UI_MINIMAL:-0}" == 1 ]]; then
-    printf '%sPublic temporary link: URL + code allow agent control. Continue? [y/N] ' "$UI_YELLOW"
-  else
-    printf 'WARNING: this creates a public temporary URL. Anyone with URL and token can control the agent. Continue? [y/N] '
+  local answer mode="cloudflare" tailscale_dns=""
+  if [[ "$(uname -s)" == Linux ]] && managed_service_available && has_cmd tailscale; then
+    tailscale_dns="$( { tailscale status --json 2>/dev/null || true; } | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const x=JSON.parse(s),n=x.Self?.DNSName||"";if(x.BackendState==="Running"&&/^[A-Za-z0-9.-]+\.ts\.net\.?$/.test(n))process.stdout.write(n.replace(/\.$/,""))}catch{}})')"
   fi
-  local answer
-  read -r answer || answer=""
-  case "$answer" in
-    y|Y|yes|YES) ;;
-    *)
-      if [[ "${UI_MINIMAL:-0}" == 1 ]]; then ui_restore_cursor; fi
-      die "No changes made."
-      ;;
-  esac
-  if ! has_cmd cloudflared; then
+  if [ -n "$tailscale_dns" ]; then
+    printf 'Use private, persistent Tailscale Serve at https://%s:8443? [Y/n] ' "$tailscale_dns"
+    read -r answer || answer=""
+    case "$answer" in n|N|no|NO) mode="cloudflare" ;; *) mode="tailscale" ;; esac
+  else
+    info "Tailscale is not connected; only a temporary public tunnel is available."
+  fi
+  if [ "$mode" = cloudflare ]; then
+    if [[ "${UI_MINIMAL:-0}" == 1 ]]; then
+      printf '%sPublic temporary link: URL + code allow agent control. Continue? [y/N] ' "$UI_YELLOW"
+    else
+      printf 'WARNING: this creates a public temporary URL. Anyone with URL and token can control the agent. Continue? [y/N] '
+    fi
+    read -r answer || answer=""
+    case "$answer" in
+      y|Y|yes|YES) ;;
+      *)
+        if [[ "${UI_MINIMAL:-0}" == 1 ]]; then ui_restore_cursor; fi
+        die "No changes made."
+        ;;
+    esac
+  fi
+  if [ "$mode" = cloudflare ] && ! has_cmd cloudflared; then
     if [[ "${UI_MINIMAL:-0}" == 1 ]]; then printf 'Download verified cloudflared to your user bin? [Y/n] '; else printf 'cloudflared is missing. Download the official binary, verify its SHA-256, and install it under %s (no sudo)? [Y/n] ' "$BIN_DIR"; fi
     read -r answer || answer=""
     case "$answer" in
@@ -928,8 +970,6 @@ quickstart() {
     *":$BIN_DIR:"*) ;;
     *) PATH="$BIN_DIR:$PATH"; export PATH ;;
   esac
-  local mode="cloudflare"
-
   acquire_lock
   trap 'stop_children; release_lock; cleanup' EXIT
   trap 'exit 130' INT TERM
@@ -996,7 +1036,20 @@ quickstart() {
   done
   [ "$ready" = 1 ] || die "OpenCode did not connect. Start 'opencode service start', then rerun 'opencode-mobile'."
 
-  if [ "$mode" = cloudflare ]; then
+  if [ "$mode" = tailscale ]; then
+    [ "$bridge_managed" = 1 ] || die "Persistent Tailscale Serve requires the managed systemd --user bridge service. Rerun setup in a Linux user session with systemd available, or choose the temporary tunnel."
+    local serve_status
+    serve_status="$(tailscale serve status 2>&1 || true)"
+    if [ ! -f "$TAILSCALE_STATE_FILE" ] && grep -qE '(:8443|https://[^[:space:]]+:8443)' <<<"$serve_status"; then
+      die "Tailscale Serve already uses port 8443 and is not managed by this installer; refusing to replace it."
+    fi
+    tailscale serve --bg --https=8443 --yes "http://127.0.0.1:$port" || die "Could not configure Tailscale Serve."
+    local serve_state_tmp="$TAILSCALE_STATE_FILE.tmp.$$"
+    (umask 077; printf 'PORT=%s\n' "$port" > "$serve_state_tmp")
+    chmod 600 "$serve_state_tmp"
+    mv -f "$serve_state_tmp" "$TAILSCALE_STATE_FILE"
+    connect_url="https://$tailscale_dns:8443"
+  else
     cloudflared tunnel --url "http://127.0.0.1:$port" >"$tunnel_log" 2>&1 &
     TUNNEL_PID=$!
     printf '%s\n' "$TUNNEL_PID" > "$LOCK_DIR/tunnel.pid"
@@ -1048,12 +1101,15 @@ quickstart() {
   unset qr_payload
   unset token
   if [[ "${UI_MINIMAL:-0}" != 1 ]]; then
-    printf 'Scan QR or enter URL and token manually. Keep this terminal open; Ctrl+C stops the managed bridge/session.\n'
-    if [ -n "$tunnel_url" ]; then printf 'This public temporary URL is not saved and expires when stopped.\n'; fi
+    printf 'Scan QR or enter URL and token manually.\n'
+    if [ "$mode" = cloudflare ]; then printf 'Keep this terminal open; Ctrl+C stops the temporary tunnel.\nThis public temporary URL is not saved and expires when stopped.\n'; fi
   fi
 
-  wait "$TUNNEL_PID" || die "Cloudflare Tunnel stopped unexpectedly."
-  die "Cloudflare Tunnel stopped unexpectedly."
+  if [ "$mode" = cloudflare ]; then
+    wait "$TUNNEL_PID" || die "Cloudflare Tunnel stopped unexpectedly."
+    die "Cloudflare Tunnel stopped unexpectedly."
+  fi
+  info "Tailscale Serve is persistent and private to your tailnet; the OpenCode Mobile bridge starts at user login when systemd --user is available."
 }
 
 acquire_lock() {
@@ -1115,6 +1171,16 @@ status() {
       printf 'OpenCode Mobile bridge service: installed (systemd user manager unavailable)\n'
     fi
   fi
+  if [ -f "$TAILSCALE_STATE_FILE" ]; then
+    local serve_port serve_status
+    serve_port="$(awk -F= '$1 == "PORT" { print $2 }' "$TAILSCALE_STATE_FILE")"
+    serve_status="$(tailscale serve status 2>&1 || true)"
+    if [ -n "$serve_port" ] && grep -Fq "http://127.0.0.1:$serve_port" <<<"$serve_status"; then
+      printf 'Tailscale Serve: active (private HTTPS, port 8443)\n'
+    else
+      printf 'Tailscale Serve: configured but not active or changed\n'
+    fi
+  fi
   if [ -d "$LOCK_DIR" ]; then
     local pid
     pid="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
@@ -1134,7 +1200,26 @@ status() {
 }
 
 down() {
+  if [ -f "$TAILSCALE_STATE_FILE" ] && ! has_cmd tailscale; then
+    die "Tailscale CLI is unavailable; refusing to stop the bridge while leaving an unknown Serve route."
+  fi
   local stopped=0
+  if [ -f "$TAILSCALE_STATE_FILE" ] && has_cmd tailscale; then
+    local serve_port serve_status
+    serve_port="$(awk -F= '$1 == "PORT" { print $2 }' "$TAILSCALE_STATE_FILE")"
+    case "$serve_port" in *[!0-9]*|'') warn "Invalid managed Tailscale state; leaving Serve configuration untouched."; return 1 ;; esac
+    if [ "$serve_port" -lt 1 ] || [ "$serve_port" -gt 65535 ]; then warn "Invalid managed Tailscale port; leaving Serve configuration untouched."; return 1; fi
+    serve_status="$(tailscale serve status 2>&1 || true)"
+    if grep -Fq "http://127.0.0.1:$serve_port" <<<"$serve_status"; then
+      tailscale serve --https=8443 "http://127.0.0.1:$serve_port" off || die "Could not stop the managed Tailscale Serve endpoint."
+      rm -f "$TAILSCALE_STATE_FILE"
+      info "Stopped the OpenCode Mobile Tailscale Serve endpoint"
+      stopped=1
+    else
+      warn "Tailscale Serve no longer matches the managed bridge target; leaving it untouched and retaining ownership state."
+      return 1
+    fi
+  fi
   if [ -f "$SERVICE_UNIT_FILE" ] && grep -q '^# Managed by OpenCode Mobile installer\.' "$SERVICE_UNIT_FILE"; then
     if has_cmd systemctl && systemctl --user show-environment >/dev/null 2>&1; then
       if systemctl --user is-active --quiet "$SERVICE_UNIT_NAME" 2>/dev/null; then
@@ -1180,7 +1265,7 @@ do_setup() {
     ui_restore_cursor
     printf '%s→ Installed successfully%s\n' "$UI_GREEN" "$UI_RESET" >&3
     printf '%sRun this to start: %sopencode-mobile%s\n' "$UI_DIM" "$UI_YELLOW" "$UI_RESET" >&3
-    printf '%sPair your phone: %sopencode-mobile --copy-pairing%s (keep this terminal open)\n' "$UI_DIM" "$UI_YELLOW" "$UI_RESET" >&3
+    printf '%sPair your phone once: %sopencode-mobile --copy-pairing%s\n' "$UI_DIM" "$UI_YELLOW" "$UI_RESET" >&3
     UI_CURSOR_HIDDEN=0
   else
     printf '\nSetup complete. Run: opencode-mobile\n'
@@ -1261,6 +1346,16 @@ remove_managed_service() {
     return 0
   fi
   managed_service_available || die "Cannot reach the user service manager; start a user session and retry uninstall so the bridge can be stopped safely."
+  if [ -f "$TAILSCALE_STATE_FILE" ]; then
+    # Refuse removal if the current Serve route differs from the installer-owned route.
+    local serve_port serve_status
+    serve_port="$(awk -F= '$1 == "PORT" { print $2 }' "$TAILSCALE_STATE_FILE")"
+    case "$serve_port" in *[!0-9]*|'') die "Invalid managed Tailscale state; installation was left intact." ;; esac
+    serve_status="$(tailscale serve status 2>&1 || true)"
+    printf '%s' "$serve_status" | grep -Fq "http://127.0.0.1:$serve_port" || die "Tailscale Serve route changed; installation was left intact."
+    tailscale serve --https=8443 "http://127.0.0.1:$serve_port" off || die "Could not stop managed Tailscale Serve; installation was left intact."
+    rm -f "$TAILSCALE_STATE_FILE"
+  fi
   systemctl --user disable --now "$SERVICE_UNIT_NAME" >/dev/null 2>&1 || die "Could not stop/disable the OpenCode Mobile user service; installation was left intact."
   systemctl --user daemon-reload >/dev/null 2>&1 || die "Could not reload the user service manager; installation was left intact."
   local wanted_link="$SERVICE_UNIT_DIR/default.target.wants/$SERVICE_UNIT_NAME"

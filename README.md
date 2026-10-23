@@ -27,9 +27,8 @@ binaries are attached to that repository's GitHub Releases.
   pairing runs in the foreground and is stopped with Ctrl+C.
 
 The website download card remains on `1.0.0-beta.3` while the owner tests the
-new **`1.0.0-beta.4`** pre-release. Its bridge and web bundles are published;
-the release-signed Android APK will be attached after the build and signing
-checks complete. Releases include `SHA256SUMS`.
+new **`1.0.0-beta.4`** pre-release. Its bridge/web bundles and signed Android
+APK are published with SHA-256 checksums. The APK targets arm64-v8a.
 
 The bridge listens on `127.0.0.1:8787` by default. Remote access is expected to
 go through Tailscale or a reverse proxy; see the main repository's deployment
@@ -42,14 +41,18 @@ the GitHub `main` branch; downloaded release assets are separately checked
 against `SHA256SUMS`.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Aetherdz/opencode-mobile-dist/main/install.sh | bash -s -- setup
+installer="$(mktemp)"
+trap 'rm -f "$installer"' EXIT
+curl -fsSL https://raw.githubusercontent.com/Aetherdz/opencode-mobile-dist/main/install.sh -o "$installer"
+bash "$installer" setup
 ```
 
 On Linux/macOS, after setup, start it with just `opencode-mobile` (no `up`).
 
-This command invokes the installer directly; use it only if you trust the
-repository's current `main` branch. For high-assurance or offline review,
-download a pinned commit, inspect it, and execute the local copy instead.
+This downloads the installer to a temporary file before executing it; use it
+only if you trust the repository's current `main` branch. For high-assurance or
+offline review, download a pinned commit, inspect it, and execute the local copy
+instead. Do not pipe the installer into `bash`.
 
 For review-first installation, download the script from a specific commit,
 inspect it, then run `bash install.sh setup`.
@@ -65,14 +68,21 @@ It also registers the local MCP status tool through `opencode mcp add --global`;
 repeat setup to refresh that entry after an update. MCP currently reports local
 bridge health only; it does not start the bridge. On Linux, if a usable
 `systemd --user` manager is available, setup enables a restricted user service
-for the bridge. The service is automatically started at user login, but it does
-not keep a public tunnel alive or provide a stable public URL. Other platforms
-continue to use the foreground bridge launcher.
-`opencode-mobile` starts or reuses OpenCode and the bridge, checks health, and creates a public
-temporary Cloudflare Quick Tunnel after explicit confirmation each run. The
-Quick Tunnel remains attached to that foreground invocation and its hostname
-can change after restart. Once
-ready, it prints the bridge URL and pairing token and displays a QR payload that
+for the bridge. It starts at user login and restarts on failure within systemd's
+start limit; it does not run before login. On Linux, `opencode-mobile` prefers
+private Tailscale Serve when Tailscale is installed and connected, after
+confirmation. Serve runs in the background and resumes after reboot/Tailscale
+restart. Pair the app once with the printed tailnet URL and token; thereafter,
+the bridge starts at login and the saved app connection remains usable without
+rerunning `opencode-mobile` or restarting OpenCode. The phone must be connected
+to the same tailnet. `opencode-mobile down` stops the managed endpoint and
+bridge.
+
+If Tailscale is unavailable or declined, `opencode-mobile` offers a public,
+temporary Cloudflare Quick Tunnel only after separate explicit confirmation.
+That tunnel remains attached to the foreground invocation, its hostname changes
+after restart, and it must be recreated for later pairing. Once ready, it prints
+the bridge URL and token and displays a QR payload that
 the app scans to fill both fields automatically. You can also enter the URL and
 token manually. Use `opencode-mobile --copy-pairing` (or `--copy`) to copy the
 QR connection payload if a supported clipboard utility is installed. Anyone
@@ -95,7 +105,7 @@ Useful commands:
 
 ```bash
 ./install.sh setup                  # one-time setup
-./install.sh up                     # start / choose a transport
+./install.sh up                     # pair once with private Tailscale or an explicitly approved temporary tunnel
 ./install.sh down                   # stop managed bridge/tunnel
 ./install.sh status                 # concise status
 ./install.sh doctor                 # dependencies, permissions, health
@@ -146,7 +156,9 @@ shows the pairing URL, token, and QR payload; install `qrencode` for a terminal
 QR or enter URL/token manually in the app. `-CopyPairing` copies the URI.
 Anyone with the URL and token can access the configured workdir. Windows
 sessions are foreground-managed: press Ctrl+C in the original window to stop;
-the separate `down` command does not kill processes.
+the separate `down` command does not kill processes. Persistent Tailscale Serve
+and automatic Windows startup are not implemented; do not assume Linux behavior
+applies to Windows.
 
 Useful commands:
 
@@ -173,6 +185,8 @@ user-only ACL.
 - Node.js 22 or newer for the bridge and installer.
 - `curl` or `wget`, and `tar` on Linux/macOS.
 - `sha256sum` or `shasum`.
+- Tailscale installed and signed in on the Linux host and phone for private,
+  persistent pairing; without it, Linux setup offers the public temporary tunnel.
 - Android platform tools (`adb`) for APK installation.
 - `cloudflared` for the Linux/macOS temporary public-tunnel pairing flow; the
   installer can install a checksum-verified binary where supported.
@@ -191,7 +205,8 @@ The installer does not install Node.js, OpenCode, or `adb` for you.
    OPENCODE_URL=http://127.0.0.1:4096
    OPENCODE_PASSWORD=<the OpenCode password>
    ```
-2. Start the bridge:
+2. With Linux `systemd --user`, the bridge is started at user login. On systems
+   without that manager, start it manually:
    ```bash
    opencode-mobile-bridge
    ```
@@ -199,8 +214,10 @@ The installer does not install Node.js, OpenCode, or `adb` for you.
    ```bash
    curl http://127.0.0.1:8787/health
    ```
-4. Open the app on the same device, or use a Tailscale address. Enter the
-   bridge URL and the `AUTH_TOKEN` from the config file.
+4. On Linux, run `opencode-mobile` once and accept Tailscale Serve to print a
+   private tailnet URL and pairing token; enter/scan them in the app once. The
+   phone must stay on the same tailnet. Otherwise, use the explicitly approved
+   temporary public tunnel or a separately configured reverse proxy.
 
 To read the token locally:
 
@@ -220,7 +237,7 @@ such as `v1.0.0-beta.1`:
 | --- | --- |
 | `opencode-mobile-bridge-1.0.0-beta.1.tar.gz` | Bridge `dist/`, `package.json`, `package-lock.json`, and production `node_modules/` |
 | `opencode-mobile-bridge-1.0.0-beta.1.zip` | The same tree for the Windows installer |
-| `opencode-mobile-1.0.0-beta.1.apk` | Signed Android APK |
+| `opencode-mobile-1.0.0-beta.4.apk` | Signed Android APK |
 | `opencode-mobile-web-1.0.0-beta.1.tar.gz` | Static web export |
 | `SHA256SUMS` | `sha256  filename` lines for every asset |
 

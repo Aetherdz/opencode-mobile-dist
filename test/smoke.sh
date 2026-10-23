@@ -9,14 +9,18 @@ cleanup() { [ "${KEEP_SMOKE:-0}" = 1 ] || rm -rf "$WORK"; }
 trap cleanup EXIT
 
 RELEASE_DIR="$WORK/release"
+CURL_LOG="$WORK/curl.log"
 FAKE_BIN="$WORK/fakebin"
 PREFIX="$WORK/prefix"
 BIN_DIR="$WORK/bin"
 WORKDIR="$WORK/work"
 CONFIG_HOME="$WORK/config"
 DATA_HOME="$WORK/data"
+STATE_HOME="$WORK/state"
+RUNTIME_HOME="$WORK/runtime"
+TEST_HOME="$WORK/home"
 
-mkdir -p "$RELEASE_DIR" "$FAKE_BIN" "$WORK/bundle/dist" "$WORK/bundle/node_modules" "$WORKDIR"
+mkdir -p "$RELEASE_DIR" "$FAKE_BIN" "$WORK/bundle/dist" "$WORK/bundle/node_modules" "$WORKDIR" "$STATE_HOME" "$RUNTIME_HOME" "$TEST_HOME"
 
 cat > "$WORK/bundle/package.json" <<'EOF'
 {"name":"bridge-fixture","version":"1.0.0"}
@@ -35,16 +39,20 @@ cat > "$FAKE_BIN/curl" <<'EOF'
 set -euo pipefail
 out=""
 url=""
+printf '%s\n' "$*" >> "$CURL_LOG"
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -o) out="$2"; shift 2 ;;
-    --retry|--proto|--max-time|--connect-timeout) shift 2 ;;
+    --retry|--proto|--max-time|--connect-timeout|-u) shift 2 ;;
     --progress-bar|--tlsv1.2) shift ;;
     -*) shift ;;
     *) url="$1"; shift ;;
   esac
 done
 case "$url" in
+  http://127.0.0.1:8787/health|http://127.0.0.1:9999/global/health)
+    printf '%s\n' '{"ok":true}'
+    ;;
   https://api.github.com/*)
     if [[ "$url" == *"/releases?per_page=1" ]]; then
       printf '%s\n' '[{"tag_name":"v1.0.0-beta.1"}]'
@@ -94,9 +102,11 @@ EOF
 chmod +x "$FAKE_BIN/systemctl"
 
 export PATH="$FAKE_BIN:$PATH"
-export RELEASE_DIR
+export RELEASE_DIR CURL_LOG
+export HOME="$TEST_HOME"
 export XDG_CONFIG_HOME="$CONFIG_HOME"
 export XDG_DATA_HOME="$DATA_HOME"
+export XDG_STATE_HOME="$STATE_HOME" XDG_RUNTIME_DIR="$RUNTIME_HOME"
 
 INSTALLER_COPY="$WORK/install-copy.sh"
 cp "$ROOT_DIR/install.sh" "$INSTALLER_COPY"
@@ -136,6 +146,25 @@ fi
 exit 0
 EOF
 chmod +x "$FAKE_BIN/opencode"
+
+TS_LOG="$WORK/tailscale.log"
+TS_STATE="$WORK/tailscale.serve"
+export TS_LOG TS_STATE
+cat > "$FAKE_BIN/tailscale" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$TS_LOG"
+case "$*" in
+  "status --json") printf '%s\n' '{"BackendState":"Running","Self":{"DNSName":"mobile-host.example.ts.net."}}' ;;
+  "serve status")
+    if [ -f "$TS_STATE" ]; then printf '%s\n' 'https://mobile-host.example.ts.net:8443' '|--> http://127.0.0.1:8787'; else echo 'No serve config'; fi
+    ;;
+  "serve --bg --https=8443 --yes http://127.0.0.1:8787") touch "$TS_STATE" ;;
+  "serve --https=8443 http://127.0.0.1:8787 off") rm -f "$TS_STATE" ;;
+  *) echo "unexpected tailscale invocation: $*" >&2; exit 2 ;;
+esac
+EOF
+chmod +x "$FAKE_BIN/tailscale"
 MCP_LOG="$WORK/mcp-add.log"
 MCP_BRIDGE_ENTRY="$PREFIX/bridge/current/dist/index.js"
 export MCP_LOG MCP_BRIDGE_ENTRY
@@ -192,6 +221,40 @@ fi
 exit 0
 EOF
 chmod +x "$FAKE_BIN/opencode"
+
+# Exercise the persistent private pairing path through a PTY, without requiring
+# a real tailnet or exposing any endpoint outside this test process.
+python3 - "$ROOT_DIR/install.sh" "$PREFIX" "$BIN_DIR" "$WORKDIR" <<'PY' > "$WORK/up-output"
+import os, pty, select, sys, time
+script, prefix, bindir, workdir = sys.argv[1:]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execv(script, [script, "up", "--prefix", prefix, "--bin-dir", bindir, "--workdir", workdir, "--no-color"])
+os.write(fd, b"\n")  # accept private Tailscale Serve (the default choice)
+output = bytearray()
+while True:
+    ready, _, _ = select.select([fd], [], [], 0.2)
+    if ready:
+        try:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            output.extend(chunk)
+        except OSError:
+            break
+    done, status = os.waitpid(pid, os.WNOHANG)
+    if done:
+        break
+_, status = os.waitpid(pid, 0) if not done else (pid, status)
+if os.waitstatus_to_exitcode(status) != 0:
+    sys.stderr.write(output.decode(errors="replace"))
+    raise SystemExit(os.waitstatus_to_exitcode(status))
+sys.stdout.buffer.write(output)
+PY
+test -f "$TS_STATE"
+test "$(stat -c '%a' "$CONFIG_HOME/opencode-mobile/tailscale-serve.env")" = "600"
+grep -q 'serve --bg --https=8443 --yes http://127.0.0.1:8787' "$TS_LOG"
+grep -q 'Bridge URL: https://mobile-host.example.ts.net:8443' "$WORK/up-output"
 
 # A rejected bridge update must not replace the installed version or break the
 # existing current symlink when the published checksum does not match.
@@ -271,7 +334,8 @@ STREAM_CONFIG="$WORK/stream-config"
 STREAM_DATA="$WORK/stream-data"
 mkdir -p "$STREAM_BIN" "$STREAM_PREFIX" "$STREAM_CONFIG" "$STREAM_DATA"
 export XDG_CONFIG_HOME="$STREAM_CONFIG" XDG_DATA_HOME="$STREAM_DATA"
-cat "$ROOT_DIR/install.sh" | "$ROOT_DIR/install.sh" setup --prefix "$STREAM_PREFIX" --bin-dir "$STREAM_BIN" --workdir "$WORKDIR" --no-color > "$WORK/stream-output"
+cp "$ROOT_DIR/install.sh" "$WORK/stream-installer.sh"
+bash "$WORK/stream-installer.sh" setup --prefix "$STREAM_PREFIX" --bin-dir "$STREAM_BIN" --workdir "$WORKDIR" --no-color > "$WORK/stream-output"
 grep -q 'Installed successfully' "$WORK/stream-output"
 grep -q 'opencode-mobile' "$WORK/stream-output"
 grep -q '→ Downloading' "$WORK/stream-output"

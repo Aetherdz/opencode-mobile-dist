@@ -63,7 +63,7 @@ jobs:
         shell: pwsh
         run: |
           $tmp = Join-Path 'C:\opencode-mobile-ci' ([guid]::NewGuid().ToString('N'))
-          $work = Join-Path (Join-Path $env:WINDIR 'Temp') ('opencode-mobile-work-' + [guid]::NewGuid().ToString('N'))
+          $work = Join-Path $env:RUNNER_TEMP ('opencode-mobile-work-' + [guid]::NewGuid().ToString('N'))
           & ./install.ps1 -Command install -DryRun -NoColor `
             -Prefix (Join-Path $tmp 'prefix') -BinDir (Join-Path $tmp 'bin') `
             -WorkDir $work -DataDir (Join-Path $tmp 'data') `
@@ -74,7 +74,7 @@ jobs:
         shell: pwsh
         run: |
           $tmp = Join-Path 'C:\opencode-mobile-ci' ([guid]::NewGuid().ToString('N'))
-          $work = Join-Path (Join-Path $env:WINDIR 'Temp') ('opencode-mobile-work-' + [guid]::NewGuid().ToString('N'))
+          $work = Join-Path $env:RUNNER_TEMP ('opencode-mobile-work-' + [guid]::NewGuid().ToString('N'))
           $out = & ./install.ps1 -Command setup -DryRun -NoColor `
             -Prefix "$tmp/prefix" -BinDir "$tmp/bin" -WorkDir $work `
             -DataDir "$tmp/data" -ConfigFile "$tmp/config/bridge.env" 2>&1 | Out-String

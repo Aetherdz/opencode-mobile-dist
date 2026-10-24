@@ -54,7 +54,7 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 case "$url" in
-  http://127.0.0.1:8787/health|http://127.0.0.1:9999/global/health)
+  http://127.0.0.1:8787/health|http://127.0.0.1:9999/health|http://127.0.0.1:9999/global/health)
     printf '%s\n' '{"ok":true}'
     ;;
   https://api.github.com/*)
@@ -172,10 +172,10 @@ printf '%s\n' "$*" >> "$TS_LOG"
 case "$*" in
   "status --json") printf '%s\n' '{"BackendState":"Running","Self":{"DNSName":"mobile-host.example.ts.net."}}' ;;
   "serve status")
-    if [ -f "$TS_STATE" ]; then printf '%s\n' 'https://mobile-host.example.ts.net:8443' '|--> http://127.0.0.1:8787'; else echo 'No serve config'; fi
+    if [ -f "$TS_STATE" ]; then printf '%s\n' 'https://mobile-host.example.ts.net:8443' "|--> http://127.0.0.1:$(cat "$TS_STATE")"; else echo 'No serve config'; fi
     ;;
-  "serve --bg --https=8443 --yes http://127.0.0.1:8787") touch "$TS_STATE" ;;
-  "serve --https=8443 http://127.0.0.1:8787 off") rm -f "$TS_STATE" ;;
+  "serve --bg --https=8443 --yes http://127.0.0.1:"*) printf '%s\n' "${*: -1}" | sed 's/.*://' > "$TS_STATE" ;;
+  "serve --https=8443 http://127.0.0.1:"*" off") rm -f "$TS_STATE" ;;
   *) echo "unexpected tailscale invocation: $*" >&2; exit 2 ;;
 esac
 EOF
@@ -391,6 +391,39 @@ test "$(stat -c '%a' "$CONFIG_HOME/opencode-mobile/bridge.env")" = "600"
 cmp "$WORK/config.before-setup" "$CONFIG_HOME/opencode-mobile/bridge.env"
 after="$(awk -F= '/^AUTH_TOKEN=/{print $2}' "$CONFIG_HOME/opencode-mobile/bridge.env")"
 test "$before" = "$after"
+# A saved Tailscale endpoint must follow a deliberate bridge-port change.
+sed -i 's/^PORT=8787$/PORT=9999/' "$CONFIG_HOME/opencode-mobile/bridge.env"
+python3 - "$ROOT_DIR/install.sh" "$PREFIX" "$BIN_DIR" "$WORKDIR" <<'PY' > "$WORK/tailscale-port-change-output"
+import os, pty, select, sys, time
+script, prefix, bindir, workdir = sys.argv[1:]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execv(script, [script, "up", "--prefix", prefix, "--bin-dir", bindir, "--workdir", workdir, "--no-color"])
+output = bytearray()
+deadline = time.monotonic() + 30
+while time.monotonic() < deadline:
+    ready, _, _ = select.select([fd], [], [], 0.1)
+    if ready:
+        try:
+            chunk = os.read(fd, 65536)
+            if not chunk: break
+            output.extend(chunk)
+        except OSError: break
+    done, status = os.waitpid(pid, os.WNOHANG)
+    if done: break
+else:
+    os.kill(pid, 15)
+    sys.stderr.write(output.decode(errors="replace"))
+    raise SystemExit("Tailscale port-change resume timed out")
+_, status = os.waitpid(pid, 0) if not done else (pid, status)
+if os.waitstatus_to_exitcode(status) != 0:
+    sys.stderr.write(output.decode(errors="replace"))
+    raise SystemExit(os.waitstatus_to_exitcode(status))
+sys.stdout.buffer.write(output)
+PY
+grep -q 'serve --bg --https=8443 --yes http://127.0.0.1:9999' "$TS_LOG"
+test "$(cat "$TS_STATE")" = 9999
+sed -i 's/^PORT=9999$/PORT=8787/' "$CONFIG_HOME/opencode-mobile/bridge.env"
 "$ROOT_DIR/install.sh" down --prefix "$PREFIX" --bin-dir "$BIN_DIR" --no-color
 test ! -e "$SYSTEMCTL_STATE"
 grep -q -- '--user stop opencode-mobile-bridge.service' "$SYSTEMCTL_LOG"

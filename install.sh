@@ -1290,14 +1290,26 @@ quickstart() {
     [ "$bridge_managed" = 1 ] || die "Persistent Tailscale Serve requires the managed systemd --user bridge service. Rerun setup in a Linux user session with systemd available, or choose the temporary tunnel."
     local serve_status
     serve_status="$(tailscale serve status 2>&1 || true)"
-    if [ ! -f "$TAILSCALE_STATE_FILE" ] && grep -qE '(:8443|https://[^[:space:]]+:8443)' <<<"$serve_status"; then
+    local saved_ts_port ts_target
+    if [ -f "$TAILSCALE_STATE_FILE" ]; then
+      [ ! -L "$TAILSCALE_STATE_FILE" ] || die "Tailscale state must not be a symbolic link."
+      [ "$(stat -c '%a' "$TAILSCALE_STATE_FILE" 2>/dev/null || stat -f '%Lp' "$TAILSCALE_STATE_FILE" 2>/dev/null || true)" = 600 ] || die "Tailscale state must have mode 600."
+      saved_ts_port="$(awk -F= '$1 == "PORT" { print $2; exit }' "$TAILSCALE_STATE_FILE")"
+      case "$saved_ts_port" in *[!0-9]*|'') die "Invalid saved Tailscale port." ;; esac
+      ts_target="$(printf '%s\n' "$serve_status" | grep -Eo 'http://127\.0\.0\.1:[0-9]+' | sed 's/.*://' | sort -u)"
+      if [ -n "$ts_target" ] && [ "$ts_target" != "$saved_ts_port" ]; then
+        die "Tailscale Serve no longer matches its saved target (expected port $saved_ts_port); refusing to replace a changed route."
+      fi
+    elif grep -qE '(:8443|https://[^[:space:]]+:8443)' <<<"$serve_status"; then
       die "Tailscale Serve already uses port 8443 and is not managed by this installer; refusing to replace it."
     fi
-    tailscale serve --bg --https=8443 --yes "http://127.0.0.1:$port" || die "Could not configure Tailscale Serve."
-    local serve_state_tmp="$TAILSCALE_STATE_FILE.tmp.$$"
-    (umask 077; printf 'PORT=%s\n' "$port" > "$serve_state_tmp")
-    chmod 600 "$serve_state_tmp"
-    mv -f "$serve_state_tmp" "$TAILSCALE_STATE_FILE"
+    if [ ! -f "$TAILSCALE_STATE_FILE" ] || [ "$saved_ts_port" != "$port" ] || [ -z "$ts_target" ]; then
+      tailscale serve --bg --https=8443 --yes "http://127.0.0.1:$port" || die "Could not configure Tailscale Serve."
+      local serve_state_tmp="$TAILSCALE_STATE_FILE.tmp.$$"
+      (umask 077; printf 'PORT=%s\n' "$port" > "$serve_state_tmp")
+      chmod 600 "$serve_state_tmp"
+      mv -f "$serve_state_tmp" "$TAILSCALE_STATE_FILE"
+    fi
     connect_url="https://$tailscale_dns:8443"
   elif [ "$mode" = cloudflare ]; then
     tunnel_url="$(cloudflare_state_value HOSTNAME)"

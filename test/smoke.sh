@@ -505,7 +505,7 @@ while time.monotonic() < deadline:
         os.write(fd, b"2\r"); sent_choice = True
     if "this temporary public link is public" in text and not sent_consent:
         os.write(fd, b"y\r"); sent_consent = True
-    if "Bridge URL: https://fixture.trycloudflare.com" in text and not stop_sent:
+    if "Keep this terminal open; Ctrl+C stops the temporary tunnel." in text and not stop_sent:
         os.kill(pid, signal.SIGINT); stop_sent = True
     done, status = os.waitpid(pid, os.WNOHANG)
     if done: break

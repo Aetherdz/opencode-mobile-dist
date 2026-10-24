@@ -1297,6 +1297,9 @@ quickstart() {
       saved_ts_port="$(awk -F= '$1 == "PORT" { print $2; exit }' "$TAILSCALE_STATE_FILE")"
       case "$saved_ts_port" in *[!0-9]*|'') die "Invalid saved Tailscale port." ;; esac
       ts_target="$(printf '%s\n' "$serve_status" | grep -Eo 'http://127\.0\.0\.1:[0-9]+' | sed 's/.*://' | sort -u)"
+      if [ -z "$ts_target" ] && grep -Eq 'proxy|\|--' <<<"$serve_status"; then
+        die "Tailscale Serve has a route that no longer matches the saved loopback target; refusing to replace it."
+      fi
       if [ -n "$ts_target" ] && [ "$ts_target" != "$saved_ts_port" ]; then
         die "Tailscale Serve no longer matches its saved target (expected port $saved_ts_port); refusing to replace a changed route."
       fi

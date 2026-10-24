@@ -61,14 +61,9 @@ jobs:
 
       - name: Dry run writes nothing
         shell: pwsh
-        env:
-          OPENCODE_MOBILE_DEBUG_PATHS: "1"
         run: |
           $tmp = Join-Path 'C:\opencode-mobile-ci' ([guid]::NewGuid().ToString('N'))
           $work = Join-Path $env:ProgramData ('opencode-mobile-work-' + [guid]::NewGuid().ToString('N'))
-          $homePrefix = [IO.Path]::GetFullPath($env:USERPROFILE).TrimEnd([char[]]@('\', '/')) + [IO.Path]::DirectorySeparatorChar
-          $workPrefix = [IO.Path]::GetFullPath($work).TrimEnd([char[]]@('\', '/')) + [IO.Path]::DirectorySeparatorChar
-          Write-Host "USERPROFILE=$env:USERPROFILE HOME=$HOME RUNNER_TEMP=$env:RUNNER_TEMP PROGRAMDATA=$env:ProgramData WORK=$work HOME_PREFIX=$homePrefix WORK_PREFIX=$workPrefix INSIDE=$($workPrefix.StartsWith($homePrefix, [StringComparison]::OrdinalIgnoreCase))"
           & ./install.ps1 -Command install -DryRun -NoColor `
             -Prefix (Join-Path $tmp 'prefix') -BinDir (Join-Path $tmp 'bin') `
             -WorkDir $work -DataDir (Join-Path $tmp 'data') `

@@ -92,6 +92,7 @@ function Test-Node {
 }
 
 function Initialize-Paths {
+    param([string]$RequestedWorkDir = "")
     $homeDir = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
     $localAppData = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $homeDir ".local\share" }
     $appData = if ($env:APPDATA) { $env:APPDATA } else { Join-Path $homeDir ".config" }
@@ -100,7 +101,7 @@ function Initialize-Paths {
     if (-not $BinDir) { $BinDir = Join-Path $Prefix "bin" }
     if ($WorkDirOverride -and $Command -notin @("up", "down", "status", "uninstall")) { Die "-WorkDirOverride is reserved for generated launchers" }
     if ($WorkDirOverride -and $Command -in @("up", "down", "status", "uninstall")) { $ConfigFile = $WorkDirOverride }
-    if (-not $WorkDir) { $WorkDir = Join-Path ([IO.Path]::GetTempPath()) "opencode-mobile-workspace" }
+    if (-not $RequestedWorkDir) { $RequestedWorkDir = Join-Path ([IO.Path]::GetTempPath()) "opencode-mobile-workspace" }
     if (-not $DataDir) { $DataDir = Join-Path $Prefix "data" }
     if (-not $ConfigFile) { $ConfigFile = Join-Path $appData "opencode-mobile\bridge.env" }
     if ($Command -in @("up", "down", "status") -and -not $WorkDirOverride) {
@@ -109,14 +110,14 @@ function Initialize-Paths {
         $DataDir = Join-Path $Prefix "data"
         $ConfigFile = Join-Path $appData "opencode-mobile\bridge.env"
     }
-    if ([string]::IsNullOrWhiteSpace($WorkDir) -or [string]::IsNullOrWhiteSpace($Prefix) -or [string]::IsNullOrWhiteSpace($BinDir)) {
+    if ([string]::IsNullOrWhiteSpace($RequestedWorkDir) -or [string]::IsNullOrWhiteSpace($Prefix) -or [string]::IsNullOrWhiteSpace($BinDir)) {
         Die "WorkDir, Prefix, and BinDir must be non-empty paths"
     }
 
     try {
     $script:Prefix = [IO.Path]::GetFullPath($Prefix)
         $script:BinDir = [IO.Path]::GetFullPath($BinDir)
-        $script:WorkDir = [IO.Path]::GetFullPath($WorkDir)
+        $script:WorkDir = [IO.Path]::GetFullPath($RequestedWorkDir)
         $script:DataDir = [IO.Path]::GetFullPath($DataDir)
         $script:ConfigFile = [IO.Path]::GetFullPath($ConfigFile)
     } catch {
@@ -144,9 +145,6 @@ function Initialize-Paths {
     }
     $homePrefix = $homeFull + [IO.Path]::DirectorySeparatorChar
     $workPrefix = $workFull + [IO.Path]::DirectorySeparatorChar
-    if ($env:OPENCODE_MOBILE_DEBUG_PATHS -eq "1") {
-        Write-Host "PATHCHECK homeDir=[$homeDir] homeFull=[$homeFull] workFull=[$workFull] homePrefix=[$homePrefix] workPrefix=[$workPrefix] inside=$($workPrefix.StartsWith($homePrefix, [StringComparison]::OrdinalIgnoreCase))"
-    }
     if ($Command -notin @("up", "down", "status", "uninstall") -and $workPrefix.StartsWith($homePrefix, [StringComparison]::OrdinalIgnoreCase)) {
         Die "The configured workdir may not be inside the user profile; use a dedicated project directory outside it"
     }
@@ -1091,7 +1089,7 @@ function Uninstall-All {
 }
 
 function Invoke-Main {
-    Initialize-Paths
+    Initialize-Paths -RequestedWorkDir $WorkDir
 
     switch ($Command) {
         "install" {

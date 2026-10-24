@@ -69,28 +69,28 @@ repeat setup to refresh that entry after an update. MCP currently reports local
 bridge health only; it does not start the bridge. On Linux, if a usable
 `systemd --user` manager is available, setup enables a restricted user service
 for the bridge. It starts at user login and restarts on failure within systemd's
-start limit; it does not run before login. On Linux, `opencode-mobile` displays
-an interactive arrow-key selector for private Tailscale Serve or a fixed-hostname
-Cloudflare Tunnel. Pair the app once with the printed URL and token; thereafter,
-the bridge starts at login and the saved app connection remains usable without
-rerunning `opencode-mobile` or restarting OpenCode. The phone must be connected
-to the same tailnet. `opencode-mobile down` stops the managed endpoint and
-bridge.
+start limit; it does not run before login. Run `opencode-mobile` and select a
+connection. If Tailscale is already connected, the private option is selected by
+default; otherwise Cloudflare Quick Tunnel is selected, so a first-time test
+needs no Cloudflare account or domain. After one explicit public-link
+confirmation, the installer starts OpenCode and the bridge, prints a
+QR/link/token, and keeps the temporary tunnel alive in the foreground. Keep that
+terminal open; stopping it ends the link, and restarting creates a new URL that
+must be paired again.
 
 Tailscale Serve is private to your tailnet; the phone must also be connected to
-that tailnet. Cloudflare setup requires a Cloudflare account and a domain managed
-in it. The installer opens Cloudflare's authorization flow, asks for a hostname,
-creates a named tunnel and DNS route, then installs a restricted
-`systemd --user` service for restart at user login. The hostname remains fixed,
-so an already paired phone reconnects without entering it again. Cloudflare mode
-is public; the pairing token is its access control and requires a separate
-explicit confirmation. Once ready, it prints the bridge URL and token and displays a QR payload that
-the app scans to fill both fields automatically. You can also enter the URL and
-token manually. Use `opencode-mobile --copy-pairing` (or `--copy`) to copy the
-QR connection payload if a supported clipboard utility is installed. Anyone
-with both URL and token can control the agent. These credentials are printed
-only in the local terminal, never stored in logs. Tunnel credentials are stored
-under the private config directory with mode 600. `cloudflared` is
+that tailnet. Cloudflare Quick Tunnel is public, temporary, and protected by the
+bridge pairing token; never share the URL or token. Its explicit consent is
+mandatory and cannot be bypassed with `--yes`. Quick Tunnel writes no Cloudflare
+credentials or tunnel state to disk. For a persistent fixed hostname, choose
+the separate Cloudflare Tunnel option: it requires a Cloudflare account and a
+managed domain, opens Cloudflare authorization, asks for a hostname, creates a
+named tunnel/DNS route, and installs a restricted `systemd --user` service. The
+app scans the printed QR to fill URL and token automatically, or you can enter
+them manually. Use `opencode-mobile --copy-pairing` (or `--copy`) to copy the QR
+connection payload if a supported clipboard utility is installed. Anyone with
+both URL and token can control the agent. Credentials are printed only in the
+local terminal; `cloudflared` is
 downloaded from the official release and checked against its SHA-256 before
 being placed in the user bin directory; no sudo or system package changes are
 needed on supported Linux/macOS architectures. `down`, `status`, `doctor`, and `apk` are also
@@ -116,7 +116,7 @@ Useful commands:
 
 ```bash
 ./install.sh setup                  # one-time setup
-./install.sh up                     # choose private Tailscale or persistent Cloudflare Tunnel
+./install.sh up                     # choose Tailscale, quick Cloudflare, or persistent Cloudflare
 ./install.sh down                   # stop managed bridge/tunnel
 ./install.sh status                 # concise status
 ./install.sh doctor                 # dependencies, permissions, health

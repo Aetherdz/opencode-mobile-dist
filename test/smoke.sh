@@ -170,7 +170,9 @@ cat > "$FAKE_BIN/tailscale" <<'EOF'
 set -euo pipefail
 printf '%s\n' "$*" >> "$TS_LOG"
 case "$*" in
-  "status --json") printf '%s\n' '{"BackendState":"Running","Self":{"DNSName":"mobile-host.example.ts.net."}}' ;;
+  "status --json")
+    if [ "${TS_UNREADY:-0}" = 1 ]; then printf '%s\n' '{"BackendState":"NeedsLogin"}'; else printf '%s\n' '{"BackendState":"Running","Self":{"DNSName":"mobile-host.example.ts.net."}}'; fi
+    ;;
   "serve status")
     if [ -f "$TS_STATE" ]; then printf '%s\n' 'https://mobile-host.example.ts.net:8443' "|--> http://127.0.0.1:$(cat "$TS_STATE")"; else echo 'No serve config'; fi
     ;;
@@ -181,11 +183,18 @@ esac
 EOF
 chmod +x "$FAKE_BIN/tailscale"
 CF_TUNNEL_ID="12345678-1234-4234-8234-123456789abc"
-export CF_TUNNEL_ID
+CF_LOG="$WORK/cloudflared.log"
+export CF_TUNNEL_ID CF_LOG
 cat > "$FAKE_BIN/cloudflared" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+printf '%s\n' "$*" >> "$CF_LOG"
 case "$*" in
+  "tunnel --url http://127.0.0.1:"*)
+    printf '%s\n' 'https://fixture.trycloudflare.com'
+    trap 'kill "${sleep_pid:-}" 2>/dev/null || true; wait "${sleep_pid:-}" 2>/dev/null || true; exit 0' TERM INT
+    while :; do sleep 30 & sleep_pid=$!; wait "$sleep_pid" || true; done
+    ;;
   "tunnel login") mkdir -p "$HOME/.cloudflared"; printf cert > "$HOME/.cloudflared/cert.pem" ;;
   "tunnel create "*) mkdir -p "$HOME/.cloudflared"; printf '{"fixture":true}' > "$HOME/.cloudflared/$CF_TUNNEL_ID.json"; echo "Created tunnel fixture with id $CF_TUNNEL_ID" ;;
   "tunnel route dns "*) exit 0 ;;
@@ -430,7 +439,97 @@ grep -q -- '--user stop opencode-mobile-bridge.service' "$SYSTEMCTL_LOG"
 "$ROOT_DIR/install.sh" setup --workdir "$WORKDIR" --prefix "$PREFIX" --bin-dir "$BIN_DIR" --no-color >/dev/null
 test -f "$SYSTEMCTL_STATE"
 
-# The interactive tunnel picker must present both choices, authorize the
+# Linux first-run offers an account-free Quick Tunnel. `--yes` must not bypass
+# the public exposure confirmation, and an accepted tunnel must be temporary.
+: > "$CF_LOG"
+python3 - "$ROOT_DIR/install.sh" "$PREFIX" "$BIN_DIR" "$WORKDIR" <<'PY' > "$WORK/cloudflare-quick-denied-output" || quick_denied_status=$?
+import os, pty, select, sys, time
+script, prefix, bindir, workdir = sys.argv[1:]
+pid, fd = pty.fork()
+if pid == 0:
+    os.environ["TS_UNREADY"] = "1"
+    os.execv(script, [script, "up", "--yes", "--prefix", prefix, "--bin-dir", bindir, "--workdir", workdir, "--no-color"])
+output = bytearray()
+sent_choice = sent_consent = False
+deadline = time.monotonic() + 30
+while time.monotonic() < deadline:
+    ready, _, _ = select.select([fd], [], [], 0.1)
+    if ready:
+        try:
+            chunk = os.read(fd, 65536)
+            if not chunk: break
+            output.extend(chunk)
+        except OSError: break
+    text = output.decode(errors="replace")
+    if "no account or domain" in text and not sent_choice:
+        os.write(fd, b"\r"); sent_choice = True
+    if "this temporary public link is public" in text and not sent_consent:
+        os.write(fd, b"n\r"); sent_consent = True
+    done, status = os.waitpid(pid, os.WNOHANG)
+    if done: break
+else:
+    os.kill(pid, 15)
+    sys.stderr.write(output.decode(errors="replace"))
+    raise SystemExit("Cloudflare Quick Tunnel denial test timed out")
+_, status = os.waitpid(pid, 0) if not done else (pid, status)
+if os.waitstatus_to_exitcode(status) == 0:
+    sys.stderr.write(output.decode(errors="replace"))
+    raise SystemExit("Quick Tunnel accepted without explicit consent")
+sys.stdout.buffer.write(output)
+PY
+grep -q 'No changes made' "$WORK/cloudflare-quick-denied-output"
+test ! -s "$CF_LOG"
+test ! -e "$CONFIG_HOME/opencode-mobile/cloudflare-tunnel.env"
+test ! -e "$SYSTEMCTL_CLOUDFLARE_STATE"
+
+python3 - "$ROOT_DIR/install.sh" "$PREFIX" "$BIN_DIR" "$WORKDIR" <<'PY' > "$WORK/cloudflare-quick-output"
+import os, pty, select, signal, sys, time
+script, prefix, bindir, workdir = sys.argv[1:]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execv(script, [script, "up", "--prefix", prefix, "--bin-dir", bindir, "--workdir", workdir, "--no-color"])
+output = bytearray()
+sent_choice = sent_consent = stop_sent = False
+deadline = time.monotonic() + 30
+while time.monotonic() < deadline:
+    ready, _, _ = select.select([fd], [], [], 0.1)
+    if ready:
+        try:
+            chunk = os.read(fd, 65536)
+            if not chunk: break
+            output.extend(chunk)
+        except OSError: break
+    text = output.decode(errors="replace")
+    if "Cloudflare Tunnel" in text and "no account or domain" in text and not sent_choice:
+        assert "Cloudflare Quick Tunnel" in text and "Cloudflare Tunnel" in text
+        os.write(fd, b"2\r"); sent_choice = True
+    if "this temporary public link is public" in text and not sent_consent:
+        os.write(fd, b"y\r"); sent_consent = True
+    if "Bridge URL: https://fixture.trycloudflare.com" in text and not stop_sent:
+        os.kill(pid, signal.SIGINT); stop_sent = True
+    done, status = os.waitpid(pid, os.WNOHANG)
+    if done: break
+else:
+    os.kill(pid, signal.SIGTERM)
+    sys.stderr.write(output.decode(errors="replace"))
+    raise SystemExit("Cloudflare Quick Tunnel test timed out")
+_, status = os.waitpid(pid, 0) if not done else (pid, status)
+if os.waitstatus_to_exitcode(status) != 130:
+    sys.stderr.write(output.decode(errors="replace"))
+    raise SystemExit(f"expected Ctrl+C exit 130; got {os.waitstatus_to_exitcode(status)}")
+sys.stdout.buffer.write(output)
+PY
+grep -q 'Bridge URL: https://fixture.trycloudflare.com' "$WORK/cloudflare-quick-output"
+grep -q 'Pairing token:' "$WORK/cloudflare-quick-output"
+grep -q 'QR payload' "$WORK/cloudflare-quick-output"
+grep -q '^tunnel --url http://127.0.0.1:8787$' "$CF_LOG"
+! grep -Eq '^tunnel (login|create|route dns)' "$CF_LOG"
+test ! -e "$CONFIG_HOME/opencode-mobile/cloudflare-tunnel.env"
+test ! -d "$CONFIG_HOME/opencode-mobile/cloudflared"
+test ! -e "$CONFIG_HOME/systemd/user/opencode-mobile-cloudflare.service"
+test ! -e "$RUNTIME_HOME/opencode-mobile-$(id -u).lock"
+
+# The interactive tunnel picker must present all choices, authorize the
 # public Cloudflare path separately, and persist only mode-600 credentials.
 python3 - "$ROOT_DIR/install.sh" "$PREFIX" "$BIN_DIR" "$WORKDIR" <<'PY' > "$WORK/cloudflare-up-output"
 import os, pty, select, sys, time
@@ -452,8 +551,8 @@ while time.monotonic() < deadline:
         except OSError: break
     text = output.decode(errors="replace")
     if "└ ↑/↓ move" in text and not sent_choice:
-        assert "Tailscale Serve" in text and "Cloudflare Tunnel" in text
-        os.write(fd, b"2\r"); sent_choice = True
+        assert "Tailscale Serve" in text and "Cloudflare Quick Tunnel" in text and "Cloudflare Tunnel" in text
+        os.write(fd, b"3\r"); sent_choice = True
     if "Type yes:" in text and not sent_consent:
         os.write(fd, b"yes\r"); sent_consent = True
     if "Enter an unused subdomain" in text and not sent_host:
@@ -548,7 +647,7 @@ if grep -q 'Bad file descriptor' "$fd3_output"; then
   echo "quickstart failed to recover its pairing output descriptor" >&2
   exit 1
 fi
-"$ROOT_DIR/install.sh" version --no-color | grep -q '0.3.3'
+"$ROOT_DIR/install.sh" version --no-color | grep -q '0.3.4'
 status_output="$("$ROOT_DIR/install.sh" status --prefix "$PREFIX" --bin-dir "$BIN_DIR" --no-color)"
 grep -q 'bridge service: active' <<<"$status_output"
 if "$ROOT_DIR/install.sh" install --workdir "$HOME" --prefix "$WORKDIR/prefix" --bin-dir "$WORKDIR/bin" --no-color >/dev/null 2>&1; then

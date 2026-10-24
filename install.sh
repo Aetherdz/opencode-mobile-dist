@@ -24,29 +24,31 @@ ui_hide_cursor() {
 }
 ui_arrow() { printf '%s→%s %s%s%s\n' "${UI_CYAN:-}" "${UI_RESET:-}" "${UI_WHITE:-}" "$1" "${UI_RESET:-}" >&3; }
 ui_choose_tunnel() {
-  local tailscale_dns="${1:-}" selected=0 key rest cf_label cf_hint ts_hint
+  local tailscale_dns="${1:-}" selected=0 key rest is_linux=0 max_selection=1 ts_hint
   [ -t 0 ] && [ -r /dev/tty ] || die "Tunnel selection needs an interactive terminal. Run 'opencode-mobile' in a terminal."
-  if [[ "$(uname -s)" == Linux ]]; then
-    cf_label="Cloudflare Tunnel"; cf_hint="Public fixed link · Cloudflare account + domain"
-  else
-    cf_label="Cloudflare Quick Tunnel"; cf_hint="Public temporary link · changes after restart"
-  fi
+  if [[ "$(uname -s)" == Linux ]]; then is_linux=1; max_selection=2; fi
+  # Prefer Tailscale when ready; otherwise default to the no-account quick link.
+  [ -n "$tailscale_dns" ] || selected=1
   if [ -n "$tailscale_dns" ]; then ts_hint="Private to your tailnet · ready"; else ts_hint="Private link · requires Tailscale on both devices"; fi
   while :; do
     printf '\033[2J\033[H' >&3
     printf '┌ OpenCode Mobile · Connection\n│\n◇ Select connection\n│\n' >&3
     if (( selected == 0 )); then printf '│ %s› %sTailscale Serve%s\n│   %s%s%s\n│\n' "$UI_CYAN" "$UI_BOLD" "$UI_RESET" "$UI_DIM" "$ts_hint" "$UI_RESET" >&3; else printf '│   Tailscale Serve\n│   %s%s%s\n│\n' "$UI_DIM" "$ts_hint" "$UI_RESET" >&3; fi
-    if (( selected == 1 )); then printf '│ %s› %s%s%s\n│   %s%s%s\n│\n' "$UI_CYAN" "$UI_BOLD" "$cf_label" "$UI_RESET" "$UI_DIM" "$cf_hint" "$UI_RESET" >&3; else printf '│   %s\n│   %s%s%s\n│\n' "$cf_label" "$UI_DIM" "$cf_hint" "$UI_RESET" >&3; fi
+    if (( selected == 1 )); then printf '│ %s› %sCloudflare Quick Tunnel%s\n│   %sPublic temporary link · no account or domain; changes after restart%s\n│\n' "$UI_CYAN" "$UI_BOLD" "$UI_RESET" "$UI_DIM" "$UI_RESET" >&3; else printf '│   Cloudflare Quick Tunnel\n│   %sPublic temporary link · no account or domain; changes after restart%s\n│\n' "$UI_DIM" "$UI_RESET" >&3; fi
+    if (( is_linux == 1 )); then
+      if (( selected == 2 )); then printf '│ %s› %sCloudflare Tunnel%s\n│   %sPublic fixed link · requires Cloudflare account + domain%s\n│\n' "$UI_CYAN" "$UI_BOLD" "$UI_RESET" "$UI_DIM" "$UI_RESET" >&3; else printf '│   Cloudflare Tunnel\n│   %sPublic fixed link · requires Cloudflare account + domain%s\n│\n' "$UI_DIM" "$UI_RESET" >&3; fi
+    fi
     printf '└ ↑/↓ move · Enter select · Esc cancel\n' >&3
     IFS= read -r -s -n 1 key < /dev/tty || die "Could not read tunnel selection."
     if [[ "$key" == $'\033' ]]; then
       IFS= read -r -s -n 1 -t 1 rest < /dev/tty || rest=""
       if [[ "$rest" == "[" ]]; then
         IFS= read -r -s -n 1 -t 1 rest < /dev/tty || rest=""
-        case "$rest" in A) selected=0 ;; B) selected=1 ;; esac
+        case "$rest" in A) (( selected > 0 )) && selected=$((selected - 1)) ;; B) (( selected < max_selection )) && selected=$((selected + 1)) ;; esac
       else die "Tunnel selection cancelled."; fi
     elif [[ "$key" == "1" ]]; then selected=0
     elif [[ "$key" == "2" ]]; then selected=1
+    elif [[ "$key" == "3" && "$is_linux" == 1 ]]; then selected=2
     elif [[ "$key" == q || "$key" == Q ]]; then die "Tunnel selection cancelled."
     elif [[ "$key" == "" ]]; then printf '%s' "$selected"; return 0
     fi
@@ -73,7 +75,7 @@ if [[ -t 1 && -z "${NO_COLOR:-}" && "${TERM:-dumb}" != dumb && "${NO_COLOR_FLAG:
   UI_WHITE=$'\033[37m'; UI_BOLD=$'\033[1m'; UI_RESET=$'\033[0m'
 fi
 
-INSTALLER_VERSION="0.3.3"
+INSTALLER_VERSION="0.3.4"
 DEFAULT_REPO="Aetherdz/opencode-mobile"
 DEFAULT_PREFIX="${XDG_DATA_HOME:-$HOME/.local/share}/opencode-mobile"
 DEFAULT_BIN_DIR="$HOME/.local/bin"
@@ -1081,7 +1083,7 @@ quickstart() {
     step "Quickstart plan"
     info "Would check the latest bridge release and update an outdated installation"
     info "Would prepare a private mode-600 config and local pairing token"
-    info "Would offer a keyboard menu for private Tailscale Serve or fixed-hostname Cloudflare Tunnel"
+    info "Would offer private Tailscale, temporary no-account Cloudflare Quick Tunnel, or persistent fixed-hostname Cloudflare Tunnel"
     info "Would require explicit confirmation before enabling the public Cloudflare endpoint"
     info "Would print the connection URL/token and render a scannable QR from the bundled renderer"
     [ "$COPY_PAIRING" = 1 ] && info "Would try to copy the QR connection payload to a supported clipboard"
@@ -1152,8 +1154,10 @@ quickstart() {
     if [ "$selection" = 0 ]; then
       [ -n "$tailscale_dns" ] || die "Tailscale Serve is unavailable. Sign in to Tailscale, enable HTTPS certificates, then retry."
       mode="tailscale"
+    elif [[ "$(uname -s)" == Linux && "$selection" = 2 ]]; then
+      mode="cloudflare"
     else
-      if [[ "$(uname -s)" == Linux ]]; then mode="cloudflare"; else mode="cloudflare_quick"; fi
+      mode="cloudflare_quick"
     fi
   fi
   if [ "$mode" = cloudflare_quick ]; then
@@ -1356,7 +1360,7 @@ quickstart() {
     if ! has_cmd qrencode && [ ! -d "$PREFIX/bridge/current/node_modules/qrcode-terminal" ]; then printf '  URL and token above can be entered manually.\n' >&3; fi
   fi
   if [ "$COPY_PAIRING" = 1 ]; then
-    if [ "$mode" = cloudflare ]; then printf 'WARNING: copied pairing data contains the Cloudflare bearer token; clipboard history may retain it.\n' >&3; fi
+    printf 'WARNING: copied pairing data contains the bridge access token; clipboard history may retain it.\n' >&3
     if has_cmd termux-clipboard-set; then
       printf '%s' "$qr_payload" | termux-clipboard-set && printf '  QR connection data copied to clipboard.\n' >&3
     elif has_cmd pbcopy; then

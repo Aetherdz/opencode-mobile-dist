@@ -23,6 +23,35 @@ ui_hide_cursor() {
   fi
 }
 ui_arrow() { printf '%s→%s %s%s%s\n' "${UI_CYAN:-}" "${UI_RESET:-}" "${UI_WHITE:-}" "$1" "${UI_RESET:-}" >&3; }
+ui_choose_tunnel() {
+  local tailscale_dns="${1:-}" selected=0 key rest cf_label cf_hint ts_hint
+  [ -t 0 ] && [ -r /dev/tty ] || die "Tunnel selection needs an interactive terminal. Run 'opencode-mobile' in a terminal."
+  if [[ "$(uname -s)" == Linux ]]; then
+    cf_label="Cloudflare Tunnel"; cf_hint="Public fixed link · Cloudflare account + domain"
+  else
+    cf_label="Cloudflare Quick Tunnel"; cf_hint="Public temporary link · changes after restart"
+  fi
+  if [ -n "$tailscale_dns" ]; then ts_hint="Private to your tailnet · ready"; else ts_hint="Private link · requires Tailscale on both devices"; fi
+  while :; do
+    printf '\033[2J\033[H' >&3
+    printf '┌ OpenCode Mobile · Connection\n│\n◇ Select connection\n│\n' >&3
+    if (( selected == 0 )); then printf '│ %s› %sTailscale Serve%s\n│   %s%s%s\n│\n' "$UI_CYAN" "$UI_BOLD" "$UI_RESET" "$UI_DIM" "$ts_hint" "$UI_RESET" >&3; else printf '│   Tailscale Serve\n│   %s%s%s\n│\n' "$UI_DIM" "$ts_hint" "$UI_RESET" >&3; fi
+    if (( selected == 1 )); then printf '│ %s› %s%s%s\n│   %s%s%s\n│\n' "$UI_CYAN" "$UI_BOLD" "$cf_label" "$UI_RESET" "$UI_DIM" "$cf_hint" "$UI_RESET" >&3; else printf '│   %s\n│   %s%s%s\n│\n' "$cf_label" "$UI_DIM" "$cf_hint" "$UI_RESET" >&3; fi
+    printf '└ ↑/↓ move · Enter select · Esc cancel\n' >&3
+    IFS= read -r -s -n 1 key < /dev/tty || die "Could not read tunnel selection."
+    if [[ "$key" == $'\033' ]]; then
+      IFS= read -r -s -n 1 -t 1 rest < /dev/tty || rest=""
+      if [[ "$rest" == "[" ]]; then
+        IFS= read -r -s -n 1 -t 1 rest < /dev/tty || rest=""
+        case "$rest" in A) selected=0 ;; B) selected=1 ;; esac
+      else die "Tunnel selection cancelled."; fi
+    elif [[ "$key" == "1" ]]; then selected=0
+    elif [[ "$key" == "2" ]]; then selected=1
+    elif [[ "$key" == q || "$key" == Q ]]; then die "Tunnel selection cancelled."
+    elif [[ "$key" == "" ]]; then printf '%s' "$selected"; return 0
+    fi
+  done
+}
 ui_logo() {
   local version="${INSTALLER_VERSION:-0.3.0}"
   printf '%s%s░█▀█░█▀█░█▀▀░█▄░█\n░█░█░█▀▀░█▀▀░█░▀█\n░▀▀▀░▀░░░▀▀▀░▀░░▀\n\n░█▀▀░█▀█░█▀▄░█▀▀\n░█░░░█░█░█░█░█▀▀\n░▀▀▀░▀▀▀░▀▀░░▀▀▀\n\n░█▄█▄█░█▀█░█▀▄░█░█░░░█▀▀\n░█░█░█░█░█░█▀▄░█░█░░░█▀▀\n░▀░▀░▀░▀▀▀░▀▀░░▀░▀▀▀░▀▀▀\n░█▀▄▀█░█▀▀░█▀▄░█▀▀░█░░░█▀▀\n░█░▀░█░█▀▀░█▀▄░█▀▀░█░░░█▀▀\n░▀░░░▀░▀▀▀░▀░▀░▀▀▀░▀▀▀░▀▀▀%s\n' "${UI_BOLD:-}" "${UI_CYAN:-}" "${UI_RESET:-}" >&3
@@ -44,7 +73,7 @@ if [[ -t 1 && -z "${NO_COLOR:-}" && "${TERM:-dumb}" != dumb && "${NO_COLOR_FLAG:
   UI_WHITE=$'\033[37m'; UI_BOLD=$'\033[1m'; UI_RESET=$'\033[0m'
 fi
 
-INSTALLER_VERSION="0.3.2"
+INSTALLER_VERSION="0.3.3"
 DEFAULT_REPO="Aetherdz/opencode-mobile"
 DEFAULT_PREFIX="${XDG_DATA_HOME:-$HOME/.local/share}/opencode-mobile"
 DEFAULT_BIN_DIR="$HOME/.local/bin"
@@ -81,6 +110,11 @@ SERVICE_UNIT_NAME="opencode-mobile-bridge.service"
 SERVICE_UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 SERVICE_UNIT_FILE="$SERVICE_UNIT_DIR/$SERVICE_UNIT_NAME"
 TAILSCALE_STATE_FILE="$CONFIG_DIR/tailscale-serve.env"
+CLOUDFLARE_STATE_FILE="$CONFIG_DIR/cloudflare-tunnel.env"
+CLOUDFLARE_UNIT_NAME="opencode-mobile-cloudflare.service"
+CLOUDFLARE_UNIT_FILE="$SERVICE_UNIT_DIR/$CLOUDFLARE_UNIT_NAME"
+CLOUDFLARE_CONFIG_DIR="$CONFIG_DIR/cloudflared"
+CLOUDFLARE_CONFIG_FILE="$CLOUDFLARE_CONFIG_DIR/config.yml"
 
 RED=""
 GREEN=""
@@ -159,7 +193,7 @@ Usage:
 Commands:
   install       Install the bridge (default) and optionally the Android app.
   setup         Install/configure once; preserves existing token and settings.
-  up            Start OpenCode and bridge; prefer persistent private Tailscale Serve.
+  up            Start OpenCode/bridge and choose a persistent tunnel (Linux).
   down          Stop services started by this tool and release its lock.
   status        Show a short local service status.
   apk           Verify and display the latest Android APK URL and SHA-256.
@@ -300,6 +334,11 @@ parse_args() {
 
   CONFIG_FILE="${OPENCODE_MOBILE_CONFIG:-$CONFIG_FILE}"
   CONFIG_DIR="$(dirname "$CONFIG_FILE")"
+  TAILSCALE_STATE_FILE="$CONFIG_DIR/tailscale-serve.env"
+  CLOUDFLARE_STATE_FILE="$CONFIG_DIR/cloudflare-tunnel.env"
+  CLOUDFLARE_UNIT_FILE="$SERVICE_UNIT_DIR/$CLOUDFLARE_UNIT_NAME"
+  CLOUDFLARE_CONFIG_DIR="$CONFIG_DIR/cloudflared"
+  CLOUDFLARE_CONFIG_FILE="$CLOUDFLARE_CONFIG_DIR/config.yml"
 
   if [ "$SHOW_VERSION" = 1 ]; then
     printf 'opencode-mobile-installer %s\n' "$INSTALLER_VERSION"
@@ -917,6 +956,118 @@ install_cloudflared() {
   has_cmd cloudflared || die "cloudflared did not install successfully."
 }
 
+cloudflare_state_value() {
+  local key="$1"
+  awk -F= -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1); exit }' "$CLOUDFLARE_STATE_FILE" 2>/dev/null || true
+}
+
+write_cloudflare_config() {
+  local tunnel_id="$1" hostname="$2" port="$3" cred_file="$4" tmp
+  tmp="$CLOUDFLARE_CONFIG_FILE.tmp.$$"
+  {
+    printf 'tunnel: %s\n' "$tunnel_id"
+    printf 'credentials-file: %s\n' "$(yaml_quote "$cred_file")"
+    printf 'ingress:\n  - hostname: %s\n    service: http://127.0.0.1:%s\n  - service: http_status:404\n' "$hostname" "$port"
+  } > "$tmp"
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$CLOUDFLARE_CONFIG_FILE"
+}
+
+yaml_quote() {
+  local value="$1"
+  case "$value" in *$'\n'*|*$'\r'*) die "Newlines are not allowed in Cloudflare config paths." ;; esac
+  value="${value//\'/\'\'}"
+  printf "'%s'" "$value"
+}
+
+install_cloudflare_tunnel_service() {
+  local cloudflared_bin="$1" tunnel_id="$2" unit_tmp
+  managed_service_available || die "A systemd user manager is required for persistent Cloudflare Tunnel."
+  [ ! -L "$CLOUDFLARE_UNIT_FILE" ] || die "Refusing a symbolic-link Cloudflare service unit."
+  [ ! -e "$CLOUDFLARE_UNIT_FILE" ] || grep -q '^# Managed by OpenCode Mobile Cloudflare Tunnel\.' "$CLOUDFLARE_UNIT_FILE" || die "An unowned unit already exists at $CLOUDFLARE_UNIT_FILE; leaving it untouched."
+  mkdir -p "$SERVICE_UNIT_DIR"
+  unit_tmp="$CLOUDFLARE_UNIT_FILE.tmp.$$"
+  (
+    umask 077
+    {
+      printf '# Managed by OpenCode Mobile Cloudflare Tunnel. Do not edit.\n'
+      printf '[Unit]\nDescription=OpenCode Mobile Cloudflare Tunnel\nAfter=opencode-mobile-bridge.service network-online.target\nWants=network-online.target\nRequires=opencode-mobile-bridge.service\nPartOf=opencode-mobile-bridge.service\n\n'
+      printf '[Service]\nType=simple\n'
+      printf 'Environment=HOME=%s\n' "$(systemd_quote "$HOME")"
+      printf 'Environment=PATH=%s\n' "$(systemd_quote "/usr/local/bin:/usr/bin:/bin")"
+      printf 'ExecStart=%s tunnel --no-autoupdate --config %s run %s\n' "$(systemd_quote "$cloudflared_bin")" "$(systemd_quote "$CLOUDFLARE_CONFIG_FILE")" "$tunnel_id"
+      printf 'Restart=on-failure\nRestartSec=10s\nUMask=0077\nNoNewPrivileges=true\nCapabilityBoundingSet=\nProtectSystem=strict\nProtectHome=read-only\nPrivateTmp=true\nPrivateDevices=true\nProtectKernelTunables=true\nProtectControlGroups=true\nLockPersonality=true\nRestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX\n\n[Install]\nWantedBy=default.target\n'
+    } > "$unit_tmp"
+  ) || { rm -f "$unit_tmp"; die "Could not write the Cloudflare Tunnel service unit."; }
+  chmod 600 "$unit_tmp"
+  mv -f "$unit_tmp" "$CLOUDFLARE_UNIT_FILE"
+  systemctl --user daemon-reload || die "Could not reload the systemd user manager."
+  systemctl --user enable --now "$CLOUDFLARE_UNIT_NAME" || die "Could not enable/start the Cloudflare Tunnel service."
+}
+
+configure_cloudflare_tunnel() {
+  local port="$1" hostname tunnel_name create_output tunnel_id source_cred cred_file cloudflared_bin consent
+  [ "$(uname -s)" = Linux ] || die "Persistent Cloudflare Tunnel setup currently requires Linux with systemd --user."
+  managed_service_available || die "Persistent Cloudflare Tunnel requires a working systemd user manager."
+  [ -f "$SERVICE_UNIT_FILE" ] && [ ! -L "$SERVICE_UNIT_FILE" ] && grep -q '^# Managed by OpenCode Mobile installer\.' "$SERVICE_UNIT_FILE" || die "Cloudflare Tunnel requires the managed OpenCode Mobile bridge service. Run setup first."
+  systemctl --user is-active --quiet "$SERVICE_UNIT_NAME" || die "Cloudflare Tunnel requires the managed bridge service to be active. Run setup and retry."
+  [ ! -L "$CLOUDFLARE_UNIT_FILE" ] || die "Refusing a symbolic-link Cloudflare service unit."
+  [ ! -e "$CLOUDFLARE_UNIT_FILE" ] || grep -q '^# Managed by OpenCode Mobile Cloudflare Tunnel\.' "$CLOUDFLARE_UNIT_FILE" || die "An unowned service unit already uses the Cloudflare service name."
+  [ ! -f "$TAILSCALE_STATE_FILE" ] || die "A Tailscale Serve route is already managed. Run 'opencode-mobile down' before switching tunnel modes."
+  if [[ "${UI_MINIMAL:-0}" == 1 ]]; then
+    printf '\n%sCloudflare creates a public hostname that stays active at user login until you run down. Anyone can reach /health; the pairing token protects agent control.%s\n' "$UI_YELLOW" "$UI_RESET" >&3
+    printf 'Continue with Cloudflare setup? Type yes: ' >&3
+  else
+    printf '\nWARNING: Cloudflare Tunnel is public and keeps a fixed hostname at user login until disabled with down. /health is public; the pairing token protects agent control. Continue? Type yes: '
+  fi
+  IFS= read -r consent < /dev/tty || consent=""
+  [ "$consent" = yes ] || die "Cloudflare Tunnel setup cancelled."
+  install_cloudflared
+  cloudflared_bin="$(command -v cloudflared)"
+  [ ! -L "$HOME/.cloudflared" ] || die "Refusing a symbolic-link Cloudflare config directory."
+  mkdir -p "$HOME/.cloudflared"
+  chmod 700 "$HOME/.cloudflared"
+  [ ! -L "$HOME/.cloudflared/cert.pem" ] || die "Refusing a symbolic-link Cloudflare account certificate."
+  if [ ! -s "$HOME/.cloudflared/cert.pem" ]; then
+    printf '\nCloudflare will open a browser so you can authorize a domain.\n' >&3
+    cloudflared tunnel login || die "Cloudflare login was not completed."
+  fi
+  printf 'Enter an unused subdomain you control (for example mobile.example.com; do not replace an existing record): ' >&3
+  IFS= read -r hostname < /dev/tty || hostname=""
+  [[ "$hostname" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$ ]] || die "Invalid hostname. Enter a fully qualified domain managed by your Cloudflare account."
+  printf 'Create a Cloudflare DNS route for %s? Type the hostname again to confirm: ' "$hostname" >&3
+  IFS= read -r consent < /dev/tty || consent=""
+  [ "$consent" = "$hostname" ] || die "Hostname confirmation did not match; no DNS route was created."
+  [ ! -f "$CLOUDFLARE_STATE_FILE" ] || die "A Cloudflare tunnel is already configured; use that saved mode or remove it first."
+  tunnel_name="opencode-mobile-$(id -u)-$(date +%s)"
+  create_output="$(cloudflared tunnel create "$tunnel_name" 2>&1)" || { printf '%s\n' "$create_output" >&2; die "Could not create the Cloudflare tunnel."; }
+  printf '%s\n' "$create_output" >&3
+  tunnel_id="$(printf '%s\n' "$create_output" | sed -nE 's/.*with id ([0-9a-fA-F-]{36}).*/\1/p' | tail -n 1)"
+  [[ "$tunnel_id" =~ ^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$ ]] || die "Could not identify the created Cloudflare tunnel ID."
+  source_cred="$HOME/.cloudflared/$tunnel_id.json"
+  [ -f "$source_cred" ] && [ ! -L "$source_cred" ] || die "Cloudflare did not create the expected tunnel credential file."
+  chmod 600 "$source_cred"
+  [ ! -L "$CLOUDFLARE_CONFIG_DIR" ] || die "Refusing a symbolic-link Cloudflare credential directory."
+  mkdir -p "$CLOUDFLARE_CONFIG_DIR"
+  chmod 700 "$CLOUDFLARE_CONFIG_DIR"
+  cred_file="$CLOUDFLARE_CONFIG_DIR/$tunnel_id.json"
+  [ ! -L "$cred_file" ] || die "Refusing a symbolic-link Cloudflare tunnel credential file."
+  install -m 600 "$source_cred" "$cred_file"
+  rm -f "$source_cred"
+  write_cloudflare_config "$tunnel_id" "$hostname" "$port" "$cred_file"
+  {
+    printf 'MODE=cloudflare\nHOSTNAME=%s\nTUNNEL_ID=%s\nPORT=%s\nDNS_ROUTE=0\n' "$hostname" "$tunnel_id" "$port"
+  } > "$CLOUDFLARE_STATE_FILE.tmp.$$"
+  chmod 600 "$CLOUDFLARE_STATE_FILE.tmp.$$"
+  mv -f "$CLOUDFLARE_STATE_FILE.tmp.$$" "$CLOUDFLARE_STATE_FILE"
+  cloudflared tunnel route dns "$tunnel_id" "$hostname" || die "Could not create the Cloudflare DNS route. Configuration is saved; retry 'opencode-mobile' after fixing DNS permissions."
+  local state_tmp="$CLOUDFLARE_STATE_FILE.tmp.$$"
+  awk -F= '$1 != "DNS_ROUTE" { print }' "$CLOUDFLARE_STATE_FILE" > "$state_tmp"
+  printf 'DNS_ROUTE=1\n' >> "$state_tmp"
+  chmod 600 "$state_tmp"; mv -f "$state_tmp" "$CLOUDFLARE_STATE_FILE"
+  install_cloudflare_tunnel_service "$cloudflared_bin" "$tunnel_id"
+}
+
 quickstart() {
   # Some terminal wrappers launch the persisted installer with fd 3 closed.
   # Pairing details are deliberately written to this user-visible descriptor;
@@ -930,7 +1081,8 @@ quickstart() {
     step "Quickstart plan"
     info "Would check the latest bridge release and update an outdated installation"
     info "Would prepare a private mode-600 config and local pairing token"
-    info "Would start OpenCode and bridge, prefer private persistent Tailscale Serve, or create a public temporary Quick Tunnel only after explicit consent"
+    info "Would offer a keyboard menu for private Tailscale Serve or fixed-hostname Cloudflare Tunnel"
+    info "Would require explicit confirmation before enabling the public Cloudflare endpoint"
     info "Would print the connection URL/token and render a scannable QR from the bundled renderer"
     [ "$COPY_PAIRING" = 1 ] && info "Would try to copy the QR connection payload to a supported clipboard"
     return 0
@@ -966,42 +1118,49 @@ quickstart() {
   fi
   QUIET=0
   [ -t 0 ] || die "up requires a terminal to show the local pairing details."
-  local answer mode="cloudflare" tailscale_dns=""
+  local answer mode="" tailscale_dns="" selection="" cf_id=""
   if [[ "$(uname -s)" == Linux ]] && managed_service_available && has_cmd tailscale; then
     tailscale_dns="$( { tailscale status --json 2>/dev/null || true; } | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const x=JSON.parse(s),n=x.Self?.DNSName||"";if(x.BackendState==="Running"&&/^[A-Za-z0-9.-]+\.ts\.net\.?$/.test(n))process.stdout.write(n.replace(/\.$/,""))}catch{}})')"
   fi
-  if [ -n "$tailscale_dns" ]; then
-    printf 'Use private, persistent Tailscale Serve at https://%s:8443? [Y/n] ' "$tailscale_dns"
-    read -r answer || answer=""
-    case "$answer" in n|N|no|NO) mode="cloudflare" ;; *) mode="tailscale" ;; esac
+  if [ -f "$CLOUDFLARE_STATE_FILE" ] && [ -f "$TAILSCALE_STATE_FILE" ]; then
+    die "Both managed tunnel modes have state files. Run 'opencode-mobile down' and repair the tunnel configuration before continuing."
+  fi
+  if [ -f "$CLOUDFLARE_STATE_FILE" ]; then
+    [ ! -L "$CLOUDFLARE_STATE_FILE" ] || die "Cloudflare state must not be a symbolic link."
+    [ ! -L "$CLOUDFLARE_UNIT_FILE" ] || die "Cloudflare service unit must not be a symbolic link."
+    [ -d "$CLOUDFLARE_CONFIG_DIR" ] && [ ! -L "$CLOUDFLARE_CONFIG_DIR" ] || die "Cloudflare credential directory is missing or unsafe."
+    local cf_state_mode cf_dir_mode
+    cf_state_mode="$(stat -c '%a' "$CLOUDFLARE_STATE_FILE" 2>/dev/null || stat -f '%Lp' "$CLOUDFLARE_STATE_FILE" 2>/dev/null || true)"
+    cf_dir_mode="$(stat -c '%a' "$CLOUDFLARE_CONFIG_DIR" 2>/dev/null || stat -f '%Lp' "$CLOUDFLARE_CONFIG_DIR" 2>/dev/null || true)"
+    [ "$cf_state_mode" = 600 ] && [ "$cf_dir_mode" = 700 ] || die "Cloudflare state/credential directory permissions must be 600/700."
+    mode="cloudflare"
+    [ "$(cloudflare_state_value MODE)" = cloudflare ] || die "Invalid Cloudflare tunnel state; refusing to change tunnel mode."
+    [[ "$(cloudflare_state_value HOSTNAME)" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$ ]] || die "Invalid hostname in Cloudflare state; refusing to start the tunnel."
+    cf_id="$(cloudflare_state_value TUNNEL_ID)"
+    [[ "$cf_id" =~ ^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$ ]] || die "Invalid Cloudflare tunnel ID in saved state."
+    [ -f "$CLOUDFLARE_CONFIG_FILE" ] && [ -f "$CLOUDFLARE_CONFIG_DIR/$cf_id.json" ] || die "Cloudflare config/credentials are missing; run the guided setup again."
+    [ ! -L "$CLOUDFLARE_CONFIG_FILE" ] && [ ! -L "$CLOUDFLARE_CONFIG_DIR/$cf_id.json" ] || die "Cloudflare config/credentials must not be symbolic links."
+    [ "$(stat -c '%a' "$CLOUDFLARE_CONFIG_FILE" 2>/dev/null || stat -f '%Lp' "$CLOUDFLARE_CONFIG_FILE" 2>/dev/null || true)" = 600 ] || die "Cloudflare config must have mode 600."
+    [ "$(stat -c '%a' "$CLOUDFLARE_CONFIG_DIR/$cf_id.json" 2>/dev/null || stat -f '%Lp' "$CLOUDFLARE_CONFIG_DIR/$cf_id.json" 2>/dev/null || true)" = 600 ] || die "Cloudflare tunnel credentials must have mode 600."
+    info "Using saved Cloudflare hostname $(cloudflare_state_value HOSTNAME)"
+  elif [ -f "$TAILSCALE_STATE_FILE" ]; then
+    mode="tailscale"
+    [ -n "$tailscale_dns" ] || die "Saved Tailscale Serve is unavailable; connect Tailscale and retry."
+    info "Using saved private Tailscale Serve hostname $tailscale_dns"
   else
-    info "Tailscale is not connected; only a temporary public tunnel is available."
-  fi
-  if [ "$mode" = cloudflare ]; then
-    if [[ "${UI_MINIMAL:-0}" == 1 ]]; then
-      printf '%sPublic temporary link: URL + code allow agent control. Continue? [y/N] ' "$UI_YELLOW"
+    selection="$(ui_choose_tunnel "$tailscale_dns")"
+    if [ "$selection" = 0 ]; then
+      [ -n "$tailscale_dns" ] || die "Tailscale Serve is unavailable. Sign in to Tailscale, enable HTTPS certificates, then retry."
+      mode="tailscale"
     else
-      printf 'WARNING: this creates a public temporary URL. Anyone with URL and token can control the agent. Continue? [y/N] '
+      if [[ "$(uname -s)" == Linux ]]; then mode="cloudflare"; else mode="cloudflare_quick"; fi
     fi
-    read -r answer || answer=""
-    case "$answer" in
-      y|Y|yes|YES) ;;
-      *)
-        if [[ "${UI_MINIMAL:-0}" == 1 ]]; then ui_restore_cursor; fi
-        die "No changes made."
-        ;;
-    esac
   fi
-  if [ "$mode" = cloudflare ] && ! has_cmd cloudflared; then
-    if [[ "${UI_MINIMAL:-0}" == 1 ]]; then printf 'Download verified cloudflared to your user bin? [Y/n] '; else printf 'cloudflared is missing. Download the official binary, verify its SHA-256, and install it under %s (no sudo)? [Y/n] ' "$BIN_DIR"; fi
-    read -r answer || answer=""
-    case "$answer" in
-      n|N|no|NO)
-        if [[ "${UI_MINIMAL:-0}" == 1 ]]; then ui_restore_cursor; fi
-        die "Cancelled. Install cloudflared manually, then run opencode-mobile."
-        ;;
-    esac
-    install_cloudflared
+  if [ "$mode" = cloudflare_quick ]; then
+    if [[ "${UI_MINIMAL:-0}" == 1 ]]; then printf '%sThis temporary public link changes whenever it restarts. Continue? [y/N] %s' "$UI_YELLOW" "$UI_RESET" >&3; else printf 'WARNING: this temporary public link is public and changes after restart. Continue? [y/N] '; fi
+    IFS= read -r answer < /dev/tty || answer=""
+    case "$answer" in y|Y|yes|YES) ;; *) die "No changes made." ;; esac
+    if ! has_cmd cloudflared; then install_cloudflared; fi
   fi
   case ":$PATH:" in
     *":$BIN_DIR:"*) ;;
@@ -1037,6 +1196,56 @@ quickstart() {
     die "PORT in $CONFIG_FILE is outside the valid range"
   fi
 
+  if [ "$mode" = cloudflare ] && [ -f "$CLOUDFLARE_STATE_FILE" ]; then
+    local dns_route cf_bin
+    dns_route="$(cloudflare_state_value DNS_ROUTE)"
+    case "$dns_route" in 0|1) ;; *) die "Invalid Cloudflare DNS-route state." ;; esac
+    if [ "$dns_route" != 1 ]; then
+      cf_bin="$(command -v cloudflared 2>/dev/null || true)"
+      [ -n "$cf_bin" ] || [ -x "$BIN_DIR/cloudflared" ] || die "cloudflared is missing; install it again before finishing DNS setup."
+      [ -s "$HOME/.cloudflared/cert.pem" ] || die "Cloudflare DNS setup is incomplete. Run 'cloudflared tunnel login' and retry 'opencode-mobile'."
+      cloudflared tunnel route dns "$cf_id" "$(cloudflare_state_value HOSTNAME)" || die "Could not finish the Cloudflare DNS route; fix Cloudflare permissions and retry."
+      local dns_state_tmp="$CLOUDFLARE_STATE_FILE.tmp.$$"
+      awk -F= '$1 != "DNS_ROUTE" { print }' "$CLOUDFLARE_STATE_FILE" > "$dns_state_tmp"
+      printf 'DNS_ROUTE=1\n' >> "$dns_state_tmp"
+      chmod 600 "$dns_state_tmp"; mv -f "$dns_state_tmp" "$CLOUDFLARE_STATE_FILE"
+    fi
+    local need_cf_unit=0
+    if [ -e "$CLOUDFLARE_UNIT_FILE" ]; then
+      grep -q '^# Managed by OpenCode Mobile Cloudflare Tunnel\.' "$CLOUDFLARE_UNIT_FILE" || die "An unowned unit occupies the Cloudflare service name; leaving it untouched."
+    else
+      need_cf_unit=1
+    fi
+    local saved_port
+    saved_port="$(cloudflare_state_value PORT)"
+    case "$saved_port" in *[!0-9]*|'') die "Invalid saved Cloudflare port." ;; esac
+    if [ "$saved_port" != "$port" ]; then
+      write_cloudflare_config "$cf_id" "$(cloudflare_state_value HOSTNAME)" "$port" "$CLOUDFLARE_CONFIG_DIR/$cf_id.json"
+      local state_tmp="$CLOUDFLARE_STATE_FILE.tmp.$$"
+      awk -F= '$1 != "PORT" { print }' "$CLOUDFLARE_STATE_FILE" > "$state_tmp"
+      printf 'PORT=%s\n' "$port" >> "$state_tmp"
+      chmod 600 "$state_tmp"; mv -f "$state_tmp" "$CLOUDFLARE_STATE_FILE"
+      if [ "$need_cf_unit" = 1 ]; then
+        local saved_cloudflared
+        saved_cloudflared="$(command -v cloudflared 2>/dev/null || true)"
+        [ -n "$saved_cloudflared" ] || [ -x "$BIN_DIR/cloudflared" ] || die "cloudflared is missing; install it again before starting the saved tunnel."
+        install_cloudflare_tunnel_service "${saved_cloudflared:-$BIN_DIR/cloudflared}" "$cf_id"
+      else
+        systemctl --user enable "$CLOUDFLARE_UNIT_NAME" >/dev/null || die "Could not enable the managed Cloudflare service for login."
+        systemctl --user restart "$CLOUDFLARE_UNIT_NAME" || die "Cloudflare Tunnel could not be restarted after a bridge port change."
+      fi
+    elif [ "$need_cf_unit" = 1 ]; then
+      local saved_cloudflared
+      saved_cloudflared="$(command -v cloudflared 2>/dev/null || true)"
+      [ -n "$saved_cloudflared" ] || [ -x "$BIN_DIR/cloudflared" ] || die "cloudflared is missing; install it again before starting the saved tunnel."
+      install_cloudflare_tunnel_service "${saved_cloudflared:-$BIN_DIR/cloudflared}" "$cf_id"
+    elif ! systemctl --user is-active --quiet "$CLOUDFLARE_UNIT_NAME" 2>/dev/null; then
+      systemctl --user enable --now "$CLOUDFLARE_UNIT_NAME" || die "Could not start/enable the saved Cloudflare Tunnel service."
+    else
+      systemctl --user enable "$CLOUDFLARE_UNIT_NAME" >/dev/null || die "Could not ensure the Cloudflare service starts at login."
+    fi
+  fi
+
   if curl -fsS --max-time 1 "http://127.0.0.1:$port/health" >/dev/null 2>&1; then
     if [ -f "$SERVICE_UNIT_FILE" ] && grep -q '^# Managed by OpenCode Mobile installer\.' "$SERVICE_UNIT_FILE" && managed_service_available && systemctl --user is-active --quiet "$SERVICE_UNIT_NAME" 2>/dev/null; then
       bridge_managed=1
@@ -1049,6 +1258,7 @@ quickstart() {
   [ -n "$TMP_DIR" ] || TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/opencode-mobile.XXXXXX")"
   bridge_log="$TMP_DIR/bridge.log"
   tunnel_log="$TMP_DIR/cloudflared.log"
+  : > "$bridge_log"
   if [ "$bridge_managed" = 0 ]; then
     "$BIN_DIR/opencode-mobile-bridge" >"$bridge_log" 2>&1 &
     BRIDGE_PID=$!
@@ -1073,6 +1283,11 @@ quickstart() {
   done
   [ "$ready" = 1 ] || die "OpenCode did not connect. Start 'opencode service start', then rerun 'opencode-mobile'."
 
+  if [ "$mode" = cloudflare ] && [ ! -f "$CLOUDFLARE_STATE_FILE" ]; then
+    [ "$bridge_managed" = 1 ] || die "Persistent Cloudflare Tunnel requires the managed bridge service; run setup and retry."
+    configure_cloudflare_tunnel "$port"
+  fi
+
   if [ "$mode" = tailscale ]; then
     [ "$bridge_managed" = 1 ] || die "Persistent Tailscale Serve requires the managed systemd --user bridge service. Rerun setup in a Linux user session with systemd available, or choose the temporary tunnel."
     local serve_status
@@ -1086,6 +1301,11 @@ quickstart() {
     chmod 600 "$serve_state_tmp"
     mv -f "$serve_state_tmp" "$TAILSCALE_STATE_FILE"
     connect_url="https://$tailscale_dns:8443"
+  elif [ "$mode" = cloudflare ]; then
+    tunnel_url="$(cloudflare_state_value HOSTNAME)"
+    [ -n "$tunnel_url" ] || die "Cloudflare hostname is missing from managed tunnel state."
+    systemctl --user is-active --quiet "$CLOUDFLARE_UNIT_NAME" || die "Cloudflare Tunnel service is not active; check 'systemctl --user status $CLOUDFLARE_UNIT_NAME'."
+    connect_url="https://$tunnel_url"
   else
     cloudflared tunnel --url "http://127.0.0.1:$port" >"$tunnel_log" 2>&1 &
     TUNNEL_PID=$!
@@ -1093,10 +1313,10 @@ quickstart() {
     for ((attempt = 0; attempt < 45; attempt += 1)); do
       tunnel_url="$(grep -Eo 'https://[[:alnum:]-]+\.trycloudflare\.com' "$tunnel_log" | head -n 1 || true)"
       [ -n "$tunnel_url" ] && break
-      if ! kill -0 "$TUNNEL_PID" 2>/dev/null; then die "Cloudflare Tunnel stopped before creating a link."; fi
+      if ! kill -0 "$TUNNEL_PID" 2>/dev/null; then die "Cloudflare Quick Tunnel stopped before creating a link."; fi
       sleep 1
     done
-    [ -n "$tunnel_url" ] || die "Cloudflare Tunnel did not return a link in time."
+    [ -n "$tunnel_url" ] || die "Cloudflare Quick Tunnel did not return a link in time."
     connect_url="$tunnel_url"
   fi
 
@@ -1109,7 +1329,7 @@ quickstart() {
   printf '  Pairing token: %s\n' "$token" >&3
   printf '  QR payload: scanned by OpenCode Mobile to fill URL and token.\n' >&3
   local qr_payload
-  qr_payload="$(node -e 'const u=new URL("opencode-mobile://connect");u.searchParams.set("url",process.argv[1]);u.searchParams.set("token",process.argv[2]);process.stdout.write(u.toString())' "$connect_url" "$token")"
+  qr_payload="$(printf '%s\n%s\n' "$connect_url" "$token" | node -e 'let s="";process.stdin.setEncoding("utf8");process.stdin.on("data",x=>s+=x).on("end",()=>{const [url,token]=s.replace(/\n$/,"").split("\n");const u=new URL("opencode-mobile://connect");u.searchParams.set("url",url);u.searchParams.set("token",token);process.stdout.write(u.toString())})')"
   if [[ "${UI_MINIMAL:-0}" == 1 ]]; then
     printf '\nScan this code in OpenCode Mobile:\n' >&3
     if has_cmd qrencode || [ -d "$PREFIX/bridge/current/node_modules/qrcode-terminal" ]; then
@@ -1123,6 +1343,7 @@ quickstart() {
     if ! has_cmd qrencode && [ ! -d "$PREFIX/bridge/current/node_modules/qrcode-terminal" ]; then printf '  URL and token above can be entered manually.\n' >&3; fi
   fi
   if [ "$COPY_PAIRING" = 1 ]; then
+    if [ "$mode" = cloudflare ]; then printf 'WARNING: copied pairing data contains the Cloudflare bearer token; clipboard history may retain it.\n' >&3; fi
     if has_cmd termux-clipboard-set; then
       printf '%s' "$qr_payload" | termux-clipboard-set && printf '  QR connection data copied to clipboard.\n' >&3
     elif has_cmd pbcopy; then
@@ -1139,14 +1360,18 @@ quickstart() {
   unset token
   if [[ "${UI_MINIMAL:-0}" != 1 ]]; then
     printf 'Scan QR or enter URL and token manually.\n'
-    if [ "$mode" = cloudflare ]; then printf 'Keep this terminal open; Ctrl+C stops the temporary tunnel.\nThis public temporary URL is not saved and expires when stopped.\n'; fi
+    if [ "$mode" = cloudflare ]; then printf 'Cloudflare Tunnel runs as a managed service and starts again at login. The hostname is fixed; the endpoint is public and protected by your pairing token.\n'; fi
+    if [ "$mode" = cloudflare_quick ]; then printf 'Keep this terminal open; Ctrl+C stops the temporary tunnel. The hostname changes after restart.\n'; fi
   fi
 
   if [ "$mode" = cloudflare ]; then
-    wait "$TUNNEL_PID" || die "Cloudflare Tunnel stopped unexpectedly."
-    die "Cloudflare Tunnel stopped unexpectedly."
+    info "Cloudflare Tunnel is persistent and public; both tunnel and bridge start at user login."
+  elif [ "$mode" = cloudflare_quick ]; then
+    wait "$TUNNEL_PID" || die "Cloudflare Quick Tunnel stopped unexpectedly."
+    die "Cloudflare Quick Tunnel stopped unexpectedly."
+  else
+    info "Tailscale Serve is persistent and private to your tailnet; the OpenCode Mobile bridge starts at user login when systemd --user is available."
   fi
-  info "Tailscale Serve is persistent and private to your tailnet; the OpenCode Mobile bridge starts at user login when systemd --user is available."
 }
 
 acquire_lock() {
@@ -1160,6 +1385,14 @@ acquire_lock() {
 
 release_lock() {
   rm -rf "$LOCK_DIR"
+}
+
+curl_open_code_health() {
+  local url="$1" password="$2"
+  case "$password" in *$'\n'*|*$'\r'*) return 1 ;; esac
+  password="${password//\\/\\\\}"
+  password="${password//\"/\\\"}"
+  printf 'user = "opencode:%s"\n' "$password" | curl -fsS --max-time 2 --config - "$url" >/dev/null 2>&1
 }
 
 start_opencode_service() {
@@ -1176,7 +1409,7 @@ start_opencode_service() {
     local service_password
     service_password="$(node -e 'try { const x=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); process.stdout.write(x.password || "") } catch {}' "$service_file")"
     [ -n "$service_password" ] || die "OpenCode service metadata is missing its password; refusing to start a duplicate service."
-    if [ -n "$service_password" ] && curl -fsS --max-time 2 -u "opencode:$service_password" "${service_url%/}/global/health" >/dev/null 2>&1; then
+    if [ -n "$service_password" ] && curl_open_code_health "${service_url%/}/global/health" "$service_password"; then
       info "OpenCode service is already responding"
       return
     fi
@@ -1190,7 +1423,7 @@ start_opencode_service() {
       service_url="$(node -e 'try { const x=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); process.stdout.write(x.url || "") } catch {}' "$service_file")"
       local service_password
       service_password="$(node -e 'try { const x=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); process.stdout.write(x.password || "") } catch {}' "$service_file")"
-      if [ -n "$service_url" ] && [ -n "$service_password" ] && curl -fsS --max-time 2 -u "opencode:$service_password" "${service_url%/}/global/health" >/dev/null 2>&1; then return 0; fi
+      if [ -n "$service_url" ] && [ -n "$service_password" ] && curl_open_code_health "${service_url%/}/global/health" "$service_password"; then return 0; fi
     fi
     sleep 1
   done
@@ -1218,6 +1451,17 @@ status() {
       printf 'Tailscale Serve: configured but not active or changed\n'
     fi
   fi
+  if [ -f "$CLOUDFLARE_STATE_FILE" ]; then
+    local cf_host cf_state
+    cf_host="$(cloudflare_state_value HOSTNAME)"
+    if [ -f "$CLOUDFLARE_UNIT_FILE" ] && grep -q '^# Managed by OpenCode Mobile Cloudflare Tunnel\.' "$CLOUDFLARE_UNIT_FILE"; then
+      cf_state="$(systemctl --user is-active "$CLOUDFLARE_UNIT_NAME" 2>/dev/null || true)"
+      printf 'Cloudflare Tunnel: %s (%s)\n' "${cf_state:-unknown}" "$cf_host"
+      [ "$cf_state" = active ] && active=1
+    else
+      printf 'Cloudflare Tunnel: configured service missing (%s)\n' "$cf_host"
+    fi
+  fi
   if [ -d "$LOCK_DIR" ]; then
     local pid
     pid="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
@@ -1237,10 +1481,18 @@ status() {
 }
 
 down() {
+  local stopped=0
+  if [ -f "$CLOUDFLARE_STATE_FILE" ]; then
+    [ ! -L "$CLOUDFLARE_UNIT_FILE" ] || die "Cloudflare service unit is a symbolic link; refusing to stop an unverified service."
+    [ -f "$CLOUDFLARE_UNIT_FILE" ] && grep -q '^# Managed by OpenCode Mobile Cloudflare Tunnel\.' "$CLOUDFLARE_UNIT_FILE" || die "Cloudflare state exists but service ownership cannot be verified; refusing to stop unrelated services."
+    managed_service_available || die "Could not reach systemd --user; the public Cloudflare endpoint may still be active. Log in to the owning user session and retry down."
+    systemctl --user disable --now "$CLOUDFLARE_UNIT_NAME" || die "Could not stop/disable the managed Cloudflare Tunnel. Its public endpoint may still be active."
+    info "Stopped and disabled Cloudflare Tunnel (configuration retained; next explicit 'opencode-mobile' enables it again)"
+    stopped=1
+  fi
   if [ -f "$TAILSCALE_STATE_FILE" ] && ! has_cmd tailscale; then
     die "Tailscale CLI is unavailable; refusing to stop the bridge while leaving an unknown Serve route."
   fi
-  local stopped=0
   if [ -f "$TAILSCALE_STATE_FILE" ] && has_cmd tailscale; then
     local serve_port serve_status
     serve_port="$(awk -F= '$1 == "PORT" { print $2 }' "$TAILSCALE_STATE_FILE")"
@@ -1373,6 +1625,42 @@ install_managed_service() {
 }
 
 remove_managed_service() {
+  if [ -L "$CLOUDFLARE_UNIT_FILE" ]; then
+    if [ -f "$CLOUDFLARE_STATE_FILE" ]; then
+      die "Cloudflare state exists but its service unit is a symbolic link. Refusing uninstall because the public endpoint may still be active."
+    else
+      warn "Leaving unrelated symbolic-link Cloudflare unit untouched: $CLOUDFLARE_UNIT_FILE"
+    fi
+  fi
+  if [ -f "$CLOUDFLARE_STATE_FILE" ] && [ ! -e "$CLOUDFLARE_UNIT_FILE" ]; then
+    if [ "$DRY_RUN" = 1 ]; then
+      info "Would remove saved Cloudflare Tunnel credentials and configuration"
+    else
+      managed_service_available || die "Cloudflare service unit is missing and systemd --user is unavailable; refusing to remove state while the public endpoint may still be active."
+      if systemctl --user is-active --quiet "$CLOUDFLARE_UNIT_NAME" 2>/dev/null; then
+        systemctl --user disable --now "$CLOUDFLARE_UNIT_NAME" || die "Could not stop the loaded Cloudflare service; local credentials were retained."
+      fi
+      rm -rf "$CLOUDFLARE_CONFIG_DIR"
+      rm -f "$CLOUDFLARE_STATE_FILE"
+      warn "Removed local Cloudflare tunnel state; its DNS/tunnel resources remain in your Cloudflare account."
+    fi
+  fi
+  if [ -f "$CLOUDFLARE_UNIT_FILE" ] && [ ! -L "$CLOUDFLARE_UNIT_FILE" ]; then
+    if ! grep -q '^# Managed by OpenCode Mobile Cloudflare Tunnel\.' "$CLOUDFLARE_UNIT_FILE"; then
+      [ ! -f "$CLOUDFLARE_STATE_FILE" ] || die "Cloudflare state exists but its service unit is unowned; refusing uninstall because the public endpoint may still be active."
+      warn "Leaving unowned Cloudflare unit untouched: $CLOUDFLARE_UNIT_FILE"
+    elif [ "$DRY_RUN" = 1 ]; then
+      info "Would stop, disable, and remove the OpenCode Mobile Cloudflare Tunnel service"
+    else
+      managed_service_available || die "Cannot reach the user service manager; start a user session and retry uninstall."
+      systemctl --user disable --now "$CLOUDFLARE_UNIT_NAME" >/dev/null 2>&1 || die "Could not stop/disable the Cloudflare Tunnel service; installation was left intact."
+      rm -f "$CLOUDFLARE_UNIT_FILE"
+      rm -rf "$CLOUDFLARE_CONFIG_DIR"
+      rm -f "$CLOUDFLARE_STATE_FILE"
+      systemctl --user daemon-reload >/dev/null 2>&1 || die "Could not reload the user service manager."
+      warn "Cloudflare DNS/tunnel resources remain in your Cloudflare account; delete them there if no longer needed."
+    fi
+  fi
   [ -f "$SERVICE_UNIT_FILE" ] || return 0
   if ! grep -q '^# Managed by OpenCode Mobile installer\.' "$SERVICE_UNIT_FILE"; then
     warn "Leaving unowned service unit untouched: $SERVICE_UNIT_FILE"

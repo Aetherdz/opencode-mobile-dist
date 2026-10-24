@@ -84,7 +84,8 @@ chmod +x "$FAKE_BIN/curl"
 
 SYSTEMCTL_LOG="$WORK/systemctl.log"
 SYSTEMCTL_STATE="$WORK/systemctl.active"
-export SYSTEMCTL_LOG SYSTEMCTL_STATE
+SYSTEMCTL_CLOUDFLARE_STATE="$WORK/systemctl-cloudflare.active"
+export SYSTEMCTL_LOG SYSTEMCTL_STATE SYSTEMCTL_CLOUDFLARE_STATE
 cat > "$FAKE_BIN/systemctl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -95,11 +96,18 @@ case "$*" in
     ;;
   "--user daemon-reload") exit 0 ;;
   "--user enable --now opencode-mobile-bridge.service") touch "$SYSTEMCTL_STATE" ;;
+  "--user enable --now opencode-mobile-cloudflare.service"|"--user start opencode-mobile-cloudflare.service"|"--user restart opencode-mobile-cloudflare.service") touch "$SYSTEMCTL_CLOUDFLARE_STATE" ;;
+  "--user enable opencode-mobile-cloudflare.service") exit 0 ;;
   "--user is-active --quiet opencode-mobile-bridge.service") test -f "$SYSTEMCTL_STATE" ;;
+  "--user is-active --quiet opencode-mobile-cloudflare.service") test -f "$SYSTEMCTL_CLOUDFLARE_STATE" ;;
   "--user is-active opencode-mobile-bridge.service")
     if [ -f "$SYSTEMCTL_STATE" ]; then echo active; else echo inactive; exit 3; fi
     ;;
+  "--user is-active opencode-mobile-cloudflare.service")
+    if [ -f "$SYSTEMCTL_CLOUDFLARE_STATE" ]; then echo active; else echo inactive; exit 3; fi
+    ;;
   "--user stop opencode-mobile-bridge.service"|"--user disable --now opencode-mobile-bridge.service") rm -f "$SYSTEMCTL_STATE" ;;
+  "--user stop opencode-mobile-cloudflare.service"|"--user disable --now opencode-mobile-cloudflare.service") rm -f "$SYSTEMCTL_CLOUDFLARE_STATE" ;;
   *) echo "unexpected systemctl invocation: $*" >&2; exit 2 ;;
 esac
 EOF
@@ -172,6 +180,19 @@ case "$*" in
 esac
 EOF
 chmod +x "$FAKE_BIN/tailscale"
+CF_TUNNEL_ID="12345678-1234-4234-8234-123456789abc"
+export CF_TUNNEL_ID
+cat > "$FAKE_BIN/cloudflared" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  "tunnel login") mkdir -p "$HOME/.cloudflared"; printf cert > "$HOME/.cloudflared/cert.pem" ;;
+  "tunnel create "*) mkdir -p "$HOME/.cloudflared"; printf '{"fixture":true}' > "$HOME/.cloudflared/$CF_TUNNEL_ID.json"; echo "Created tunnel fixture with id $CF_TUNNEL_ID" ;;
+  "tunnel route dns "*) exit 0 ;;
+  *) echo "unexpected cloudflared invocation: $*" >&2; exit 2 ;;
+esac
+EOF
+chmod +x "$FAKE_BIN/cloudflared"
 MCP_LOG="$WORK/mcp-add.log"
 MCP_BRIDGE_ENTRY="$PREFIX/bridge/current/dist/index.js"
 export MCP_LOG MCP_BRIDGE_ENTRY
@@ -262,6 +283,10 @@ test -f "$TS_STATE"
 test "$(stat -c '%a' "$CONFIG_HOME/opencode-mobile/tailscale-serve.env")" = "600"
 grep -q 'serve --bg --https=8443 --yes http://127.0.0.1:8787' "$TS_LOG"
 grep -q 'Bridge URL: https://mobile-host.example.ts.net:8443' "$WORK/up-output"
+if grep -q -- '-u opencode:' "$CURL_LOG"; then
+  echo "OpenCode service password unexpectedly appeared in curl arguments" >&2
+  exit 1
+fi
 
 # A rejected bridge update must not replace the installed version or break the
 # existing current symlink when the published checksum does not match.
@@ -371,6 +396,103 @@ test ! -e "$SYSTEMCTL_STATE"
 grep -q -- '--user stop opencode-mobile-bridge.service' "$SYSTEMCTL_LOG"
 "$ROOT_DIR/install.sh" setup --workdir "$WORKDIR" --prefix "$PREFIX" --bin-dir "$BIN_DIR" --no-color >/dev/null
 test -f "$SYSTEMCTL_STATE"
+
+# The interactive tunnel picker must present both choices, authorize the
+# public Cloudflare path separately, and persist only mode-600 credentials.
+python3 - "$ROOT_DIR/install.sh" "$PREFIX" "$BIN_DIR" "$WORKDIR" <<'PY' > "$WORK/cloudflare-up-output"
+import os, pty, select, sys, time
+script, prefix, bindir, workdir = sys.argv[1:]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execv(script, [script, "up", "--prefix", prefix, "--bin-dir", bindir, "--workdir", workdir, "--no-color"])
+output = bytearray()
+sent_choice = sent_consent = sent_host = sent_host_confirmation = False
+done = 0
+deadline = time.monotonic() + 30
+while time.monotonic() < deadline:
+    ready, _, _ = select.select([fd], [], [], 0.1)
+    if ready:
+        try:
+            chunk = os.read(fd, 65536)
+            if not chunk: break
+            output.extend(chunk)
+        except OSError: break
+    text = output.decode(errors="replace")
+    if "└ ↑/↓ move" in text and not sent_choice:
+        assert "Tailscale Serve" in text and "Cloudflare Tunnel" in text
+        os.write(fd, b"2\r"); sent_choice = True
+    if "Type yes:" in text and not sent_consent:
+        os.write(fd, b"yes\r"); sent_consent = True
+    if "Enter an unused subdomain" in text and not sent_host:
+        os.write(fd, b"mobile.example.com\r"); sent_host = True
+    if "Type the hostname again to confirm:" in text and not sent_host_confirmation:
+        os.write(fd, b"mobile.example.com\r"); sent_host_confirmation = True
+    done, status = os.waitpid(pid, os.WNOHANG)
+    if done: break
+else:
+    os.kill(pid, 15)
+    sys.stderr.write(output.decode(errors="replace"))
+    raise SystemExit("Cloudflare interactive setup timed out")
+_, status = os.waitpid(pid, 0) if not done else (pid, status)
+if os.waitstatus_to_exitcode(status) != 0:
+    sys.stderr.write(output.decode(errors="replace"))
+    raise SystemExit(os.waitstatus_to_exitcode(status))
+sys.stdout.buffer.write(output)
+PY
+CF_CONFIG="$CONFIG_HOME/opencode-mobile/cloudflared"
+test -f "$CONFIG_HOME/opencode-mobile/cloudflare-tunnel.env"
+test "$(stat -c '%a' "$CONFIG_HOME/opencode-mobile/cloudflare-tunnel.env")" = "600"
+test "$(stat -c '%a' "$CF_CONFIG")" = "700"
+test "$(stat -c '%a' "$CF_CONFIG/$CF_TUNNEL_ID.json")" = "600"
+test "$(stat -c '%a' "$CF_CONFIG/config.yml")" = "600"
+grep -q 'mobile.example.com' "$CF_CONFIG/config.yml"
+test -f "$CONFIG_HOME/systemd/user/opencode-mobile-cloudflare.service"
+grep -q '^# Managed by OpenCode Mobile Cloudflare Tunnel\.' "$CONFIG_HOME/systemd/user/opencode-mobile-cloudflare.service"
+grep -q '^PartOf=opencode-mobile-bridge.service$' "$CONFIG_HOME/systemd/user/opencode-mobile-cloudflare.service"
+grep -q 'Bridge URL: https://mobile.example.com' "$WORK/cloudflare-up-output"
+grep -q 'Cloudflare Tunnel is public' "$WORK/cloudflare-up-output"
+grep -q '┌ OpenCode Mobile · Connection' "$WORK/cloudflare-up-output"
+grep -q '◇ Select connection' "$WORK/cloudflare-up-output"
+"$ROOT_DIR/install.sh" down --prefix "$PREFIX" --bin-dir "$BIN_DIR" --no-color
+test ! -e "$SYSTEMCTL_CLOUDFLARE_STATE"
+# Simulate an interrupted DNS setup: the next run should finish DNS routing
+# from saved tunnel credentials rather than creating a duplicate remote tunnel.
+sed -i 's/^DNS_ROUTE=1$/DNS_ROUTE=0/' "$CONFIG_HOME/opencode-mobile/cloudflare-tunnel.env"
+
+"$ROOT_DIR/install.sh" setup --workdir "$WORKDIR" --prefix "$PREFIX" --bin-dir "$BIN_DIR" --no-color >/dev/null
+test -f "$SYSTEMCTL_STATE"
+python3 - "$ROOT_DIR/install.sh" "$PREFIX" "$BIN_DIR" "$WORKDIR" <<'PY' > "$WORK/cloudflare-resume-output"
+import os, pty, select, sys, time
+script, prefix, bindir, workdir = sys.argv[1:]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execv(script, [script, "up", "--prefix", prefix, "--bin-dir", bindir, "--workdir", workdir, "--no-color"])
+output = bytearray()
+deadline = time.monotonic() + 30
+while time.monotonic() < deadline:
+    ready, _, _ = select.select([fd], [], [], 0.1)
+    if ready:
+        try:
+            chunk = os.read(fd, 65536)
+            if not chunk: break
+            output.extend(chunk)
+        except OSError: break
+    done, status = os.waitpid(pid, os.WNOHANG)
+    if done: break
+else:
+    os.kill(pid, 15)
+    sys.stderr.write(output.decode(errors="replace"))
+    raise SystemExit("saved Cloudflare tunnel resume timed out")
+_, status = os.waitpid(pid, 0) if not done else (pid, status)
+if os.waitstatus_to_exitcode(status) != 0:
+    sys.stderr.write(output.decode(errors="replace"))
+    raise SystemExit(os.waitstatus_to_exitcode(status))
+sys.stdout.buffer.write(output)
+PY
+grep -q 'Using saved Cloudflare hostname mobile.example.com' "$WORK/cloudflare-resume-output"
+grep -q 'Bridge URL: https://mobile.example.com' "$WORK/cloudflare-resume-output"
+grep -q '^DNS_ROUTE=1$' "$CONFIG_HOME/opencode-mobile/cloudflare-tunnel.env"
+test -f "$SYSTEMCTL_CLOUDFLARE_STATE"
 "$ROOT_DIR/install.sh" quickstart --dry-run --yes --workdir "$WORKDIR" --prefix "$PREFIX" --bin-dir "$BIN_DIR" --no-color
 "$ROOT_DIR/install.sh" up --dry-run --yes --workdir "$WORKDIR" --prefix "$PREFIX" --bin-dir "$BIN_DIR" --no-color
 "$ROOT_DIR/install.sh" up --dry-run --copy-pairing --workdir "$WORKDIR" --prefix "$PREFIX" --bin-dir "$BIN_DIR" --no-color
@@ -381,8 +503,9 @@ if grep -q 'Bad file descriptor' "$fd3_output"; then
   echo "quickstart failed to recover its pairing output descriptor" >&2
   exit 1
 fi
-"$ROOT_DIR/install.sh" version --no-color | grep -q '0.3.2'
-"$ROOT_DIR/install.sh" status --prefix "$PREFIX" --bin-dir "$BIN_DIR" --no-color | grep -q 'bridge service: active'
+"$ROOT_DIR/install.sh" version --no-color | grep -q '0.3.3'
+status_output="$("$ROOT_DIR/install.sh" status --prefix "$PREFIX" --bin-dir "$BIN_DIR" --no-color)"
+grep -q 'bridge service: active' <<<"$status_output"
 if "$ROOT_DIR/install.sh" install --workdir "$HOME" --prefix "$WORKDIR/prefix" --bin-dir "$WORKDIR/bin" --no-color >/dev/null 2>&1; then
   echo "expected refusal of home directory as workdir" >&2
   exit 1
@@ -402,6 +525,9 @@ test ! -e "$BIN_DIR/opencode-mobile-apk"
 test ! -e "$BIN_DIR/opencode-mobile-installer"
 test ! -e "$CONFIG_HOME/opencode-mobile"
 test ! -e "$SERVICE_UNIT"
+test ! -e "$CONFIG_HOME/systemd/user/opencode-mobile-cloudflare.service"
+test ! -e "$SYSTEMCTL_CLOUDFLARE_STATE"
+grep -q -- '--user disable --now opencode-mobile-cloudflare.service' "$SYSTEMCTL_LOG"
 test ! -e "$SYSTEMCTL_STATE"
 grep -q -- '--user disable --now opencode-mobile-bridge.service' "$SYSTEMCTL_LOG"
 test -f "$CONFIG_HOME/opencode/opencode.json"

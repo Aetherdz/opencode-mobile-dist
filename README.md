@@ -69,25 +69,28 @@ repeat setup to refresh that entry after an update. MCP currently reports local
 bridge health only; it does not start the bridge. On Linux, if a usable
 `systemd --user` manager is available, setup enables a restricted user service
 for the bridge. It starts at user login and restarts on failure within systemd's
-start limit; it does not run before login. On Linux, `opencode-mobile` prefers
-private Tailscale Serve when Tailscale is installed and connected, after
-confirmation. Serve runs in the background and resumes after reboot/Tailscale
-restart. Pair the app once with the printed tailnet URL and token; thereafter,
+start limit; it does not run before login. On Linux, `opencode-mobile` displays
+an interactive arrow-key selector for private Tailscale Serve or a fixed-hostname
+Cloudflare Tunnel. Pair the app once with the printed URL and token; thereafter,
 the bridge starts at login and the saved app connection remains usable without
 rerunning `opencode-mobile` or restarting OpenCode. The phone must be connected
 to the same tailnet. `opencode-mobile down` stops the managed endpoint and
 bridge.
 
-If Tailscale is unavailable or declined, `opencode-mobile` offers a public,
-temporary Cloudflare Quick Tunnel only after separate explicit confirmation.
-That tunnel remains attached to the foreground invocation, its hostname changes
-after restart, and it must be recreated for later pairing. Once ready, it prints
-the bridge URL and token and displays a QR payload that
+Tailscale Serve is private to your tailnet; the phone must also be connected to
+that tailnet. Cloudflare setup requires a Cloudflare account and a domain managed
+in it. The installer opens Cloudflare's authorization flow, asks for a hostname,
+creates a named tunnel and DNS route, then installs a restricted
+`systemd --user` service for restart at user login. The hostname remains fixed,
+so an already paired phone reconnects without entering it again. Cloudflare mode
+is public; the pairing token is its access control and requires a separate
+explicit confirmation. Once ready, it prints the bridge URL and token and displays a QR payload that
 the app scans to fill both fields automatically. You can also enter the URL and
 token manually. Use `opencode-mobile --copy-pairing` (or `--copy`) to copy the
 QR connection payload if a supported clipboard utility is installed. Anyone
 with both URL and token can control the agent. These credentials are printed
-only in the local terminal, never stored in logs. `cloudflared` is
+only in the local terminal, never stored in logs. Tunnel credentials are stored
+under the private config directory with mode 600. `cloudflared` is
 downloaded from the official release and checked against its SHA-256 before
 being placed in the user bin directory; no sudo or system package changes are
 needed on supported Linux/macOS architectures. `down`, `status`, `doctor`, and `apk` are also
@@ -95,17 +98,25 @@ available. `apk` verifies and prints the release URL/checksum; the release APK
 currently targets arm64-v8a only and is never installed with adb without an
 extra explicit interactive confirmation.
 
+`--copy-pairing` puts the full URL and bearer token on the system clipboard;
+clipboard managers may retain history, so use it only on a trusted computer.
+
+Cloudflare's browser login also creates the account-scoped management
+certificate at `~/.cloudflared/cert.pem`; the running service uses only the
+per-tunnel credential stored in the private app config. The installer does not
+delete a pre-existing Cloudflare certificate.
+
 The whole selected project directory is exposed via the bearer token. For
 reduced exposure, use a dedicated work directory containing only projects
-intended for remote agent access. For a fixed public hostname, the owner must
-configure a Cloudflare named tunnel and domain; this installer does not invent
-or create persistent public URLs.
+intended for remote agent access. Uninstalling stops and removes the local
+Cloudflare service and credentials but leaves the named tunnel and DNS record in
+the Cloudflare account; remove those there if no longer needed.
 
 Useful commands:
 
 ```bash
 ./install.sh setup                  # one-time setup
-./install.sh up                     # pair once with private Tailscale or an explicitly approved temporary tunnel
+./install.sh up                     # choose private Tailscale or persistent Cloudflare Tunnel
 ./install.sh down                   # stop managed bridge/tunnel
 ./install.sh status                 # concise status
 ./install.sh doctor                 # dependencies, permissions, health
@@ -186,9 +197,10 @@ user-only ACL.
 - `curl` or `wget`, and `tar` on Linux/macOS.
 - `sha256sum` or `shasum`.
 - Tailscale installed and signed in on the Linux host and phone for private,
-  persistent pairing; without it, Linux setup offers the public temporary tunnel.
+  persistent pairing, or a Cloudflare account with a domain managed there for a
+  fixed public hostname.
 - Android platform tools (`adb`) for APK installation.
-- `cloudflared` for the Linux/macOS temporary public-tunnel pairing flow; the
+- `cloudflared` for the Linux managed tunnel (and manual/macOS tunnel use); the
   installer can install a checksum-verified binary where supported.
 - `qrencode` is optional; the installer falls back to the QR renderer bundled
   with the checksum-verified Bridge release. URL and token remain available for
@@ -215,10 +227,10 @@ The installer does not install Node.js, OpenCode, or `adb` for you.
    ```bash
    curl http://127.0.0.1:8787/health
    ```
-4. On Linux, run `opencode-mobile` once and accept Tailscale Serve to print a
-   private tailnet URL and pairing token; enter/scan them in the app once. The
-   phone must stay on the same tailnet. Otherwise, use the explicitly approved
-   temporary public tunnel or a separately configured reverse proxy.
+4. On Linux, run `opencode-mobile` and select a tunnel. Pair once using the
+   printed URL/token. Tailscale keeps access private to your tailnet; Cloudflare
+   uses a fixed public hostname and requires explicit consent. Keep the user
+   session available so managed services start at login after reboot.
 
 To read the token locally:
 

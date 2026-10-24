@@ -449,6 +449,18 @@ grep -q 'mobile.example.com' "$CF_CONFIG/config.yml"
 test -f "$CONFIG_HOME/systemd/user/opencode-mobile-cloudflare.service"
 grep -q '^# Managed by OpenCode Mobile Cloudflare Tunnel\.' "$CONFIG_HOME/systemd/user/opencode-mobile-cloudflare.service"
 grep -q '^PartOf=opencode-mobile-bridge.service$' "$CONFIG_HOME/systemd/user/opencode-mobile-cloudflare.service"
+python3 - "$ROOT_DIR/install.sh" <<'PY'
+import pathlib, sys
+text = pathlib.Path(sys.argv[1]).read_text()
+body = text.split("quickstart() {", 1)[1].split("\nstatus() {", 1)[0]
+ready = body.index("[ \"$ready\" = 1 ] || die")
+for needle in ('systemctl --user enable --now "$CLOUDFLARE_UNIT_NAME"',
+               'systemctl --user restart "$CLOUDFLARE_UNIT_NAME"',
+               'install_cloudflare_tunnel_service "${saved_cloudflared:-$BIN_DIR/cloudflared}" "$cf_id"'):
+    pos = body.find(needle)
+    if pos >= 0 and pos < ready:
+        raise SystemExit(f"Cloudflare service activation precedes bridge readiness: {needle}")
+PY
 grep -q 'Bridge URL: https://mobile.example.com' "$WORK/cloudflare-up-output"
 grep -q 'Cloudflare Tunnel is public' "$WORK/cloudflare-up-output"
 grep -q '┌ OpenCode Mobile · Connection' "$WORK/cloudflare-up-output"

@@ -1118,7 +1118,7 @@ quickstart() {
   fi
   QUIET=0
   [ -t 0 ] || die "up requires a terminal to show the local pairing details."
-  local answer mode="" tailscale_dns="" selection="" cf_id=""
+  local answer mode="" tailscale_dns="" selection="" cf_id="" cf_need_unit=0 cf_port_changed=0
   if [[ "$(uname -s)" == Linux ]] && managed_service_available && has_cmd tailscale; then
     tailscale_dns="$( { tailscale status --json 2>/dev/null || true; } | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const x=JSON.parse(s),n=x.Self?.DNSName||"";if(x.BackendState==="Running"&&/^[A-Za-z0-9.-]+\.ts\.net\.?$/.test(n))process.stdout.write(n.replace(/\.$/,""))}catch{}})')"
   fi
@@ -1225,25 +1225,9 @@ quickstart() {
       awk -F= '$1 != "PORT" { print }' "$CLOUDFLARE_STATE_FILE" > "$state_tmp"
       printf 'PORT=%s\n' "$port" >> "$state_tmp"
       chmod 600 "$state_tmp"; mv -f "$state_tmp" "$CLOUDFLARE_STATE_FILE"
-      if [ "$need_cf_unit" = 1 ]; then
-        local saved_cloudflared
-        saved_cloudflared="$(command -v cloudflared 2>/dev/null || true)"
-        [ -n "$saved_cloudflared" ] || [ -x "$BIN_DIR/cloudflared" ] || die "cloudflared is missing; install it again before starting the saved tunnel."
-        install_cloudflare_tunnel_service "${saved_cloudflared:-$BIN_DIR/cloudflared}" "$cf_id"
-      else
-        systemctl --user enable "$CLOUDFLARE_UNIT_NAME" >/dev/null || die "Could not enable the managed Cloudflare service for login."
-        systemctl --user restart "$CLOUDFLARE_UNIT_NAME" || die "Cloudflare Tunnel could not be restarted after a bridge port change."
-      fi
-    elif [ "$need_cf_unit" = 1 ]; then
-      local saved_cloudflared
-      saved_cloudflared="$(command -v cloudflared 2>/dev/null || true)"
-      [ -n "$saved_cloudflared" ] || [ -x "$BIN_DIR/cloudflared" ] || die "cloudflared is missing; install it again before starting the saved tunnel."
-      install_cloudflare_tunnel_service "${saved_cloudflared:-$BIN_DIR/cloudflared}" "$cf_id"
-    elif ! systemctl --user is-active --quiet "$CLOUDFLARE_UNIT_NAME" 2>/dev/null; then
-      systemctl --user enable --now "$CLOUDFLARE_UNIT_NAME" || die "Could not start/enable the saved Cloudflare Tunnel service."
-    else
-      systemctl --user enable "$CLOUDFLARE_UNIT_NAME" >/dev/null || die "Could not ensure the Cloudflare service starts at login."
+      cf_port_changed=1
     fi
+    cf_need_unit="$need_cf_unit"
   fi
 
   if curl -fsS --max-time 1 "http://127.0.0.1:$port/health" >/dev/null 2>&1; then
@@ -1286,6 +1270,20 @@ quickstart() {
   if [ "$mode" = cloudflare ] && [ ! -f "$CLOUDFLARE_STATE_FILE" ]; then
     [ "$bridge_managed" = 1 ] || die "Persistent Cloudflare Tunnel requires the managed bridge service; run setup and retry."
     configure_cloudflare_tunnel "$port"
+  elif [ "$mode" = cloudflare ]; then
+    if [ "$cf_need_unit" = 1 ]; then
+      local saved_cloudflared
+      saved_cloudflared="$(command -v cloudflared 2>/dev/null || true)"
+      [ -n "$saved_cloudflared" ] || [ -x "$BIN_DIR/cloudflared" ] || die "cloudflared is missing; install it again before starting the saved tunnel."
+      install_cloudflare_tunnel_service "${saved_cloudflared:-$BIN_DIR/cloudflared}" "$cf_id"
+    elif [ "$cf_port_changed" = 1 ]; then
+      systemctl --user enable "$CLOUDFLARE_UNIT_NAME" >/dev/null || die "Could not enable the managed Cloudflare service for login."
+      systemctl --user restart "$CLOUDFLARE_UNIT_NAME" || die "Cloudflare Tunnel could not be restarted after a bridge port change."
+    elif ! systemctl --user is-active --quiet "$CLOUDFLARE_UNIT_NAME" 2>/dev/null; then
+      systemctl --user enable --now "$CLOUDFLARE_UNIT_NAME" || die "Could not start/enable the saved Cloudflare Tunnel service."
+    else
+      systemctl --user enable "$CLOUDFLARE_UNIT_NAME" >/dev/null || die "Could not ensure the Cloudflare service starts at login."
+    fi
   fi
 
   if [ "$mode" = tailscale ]; then

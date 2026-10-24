@@ -35,6 +35,7 @@ $ProgressPreference = "SilentlyContinue"
 $script:InstallerVersion = "0.3.1"
 $script:PackageId = "com.aetherdz.opencodemobile"
 $script:NoColorOutput = [bool]$NoColor
+$script:RequestedWorkDir = $WorkDir
 $script:Prefix = ""
 $script:BinDir = ""
 $script:WorkDir = ""
@@ -1089,7 +1090,7 @@ function Uninstall-All {
 }
 
 function Invoke-Main {
-    Initialize-Paths -RequestedWorkDir $WorkDir
+    Initialize-Paths -RequestedWorkDir $script:RequestedWorkDir
 
     switch ($Command) {
         "install" {

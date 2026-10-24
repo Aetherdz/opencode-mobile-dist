@@ -144,6 +144,9 @@ function Initialize-Paths {
     }
     $homePrefix = $homeFull + [IO.Path]::DirectorySeparatorChar
     $workPrefix = $workFull + [IO.Path]::DirectorySeparatorChar
+    if ($env:OPENCODE_MOBILE_DEBUG_PATHS -eq "1") {
+        Write-Host "PATHCHECK homeDir=[$homeDir] homeFull=[$homeFull] workFull=[$workFull] homePrefix=[$homePrefix] workPrefix=[$workPrefix] inside=$($workPrefix.StartsWith($homePrefix, [StringComparison]::OrdinalIgnoreCase))"
+    }
     if ($Command -notin @("up", "down", "status", "uninstall") -and $workPrefix.StartsWith($homePrefix, [StringComparison]::OrdinalIgnoreCase)) {
         Die "The configured workdir may not be inside the user profile; use a dedicated project directory outside it"
     }

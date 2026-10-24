@@ -61,6 +61,8 @@ jobs:
 
       - name: Dry run writes nothing
         shell: pwsh
+        env:
+          OPENCODE_MOBILE_DEBUG_PATHS: "1"
         run: |
           $tmp = Join-Path 'C:\opencode-mobile-ci' ([guid]::NewGuid().ToString('N'))
           $work = Join-Path $env:ProgramData ('opencode-mobile-work-' + [guid]::NewGuid().ToString('N'))

@@ -94,6 +94,7 @@ function Test-Node {
 
 function Initialize-Paths {
     param([string]$RequestedWorkDir = "")
+    if ($Command -in @("help", "version")) { return }
     $homeDir = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
     $localAppData = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $homeDir ".local\share" }
     $appData = if ($env:APPDATA) { $env:APPDATA } else { Join-Path $homeDir ".config" }

@@ -1089,7 +1089,7 @@ function Uninstall-All {
 }
 
 function Invoke-Main {
-    Initialize-Paths -RequestedWorkDir $script:WorkDir
+    Initialize-Paths -RequestedWorkDir $WorkDir
 
     switch ($Command) {
         "install" {

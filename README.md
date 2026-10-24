@@ -36,6 +36,16 @@ guide.
 
 ## Linux and macOS quick setup
 
+**First-run path:** install the bridge on the computer that runs OpenCode, then
+run `opencode-mobile` there and scan its QR code with the phone app. Setup
+starts from a dedicated `~/projects` work directory by default; choose a
+different narrow project folder with `--workdir` if needed. Do not use your
+entire home directory as the work directory. For the phone link, choose private
+Tailscale when available or the temporary Cloudflare Quick Tunnel. The Quick
+Tunnel is public: the installer always asks for explicit consent, even with
+`--yes`. Keep its URL and pairing token private, and leave the terminal open
+while connected. The Windows route is documented below.
+
 Run this single command to download and install the current script. It trusts
 the GitHub `main` branch; downloaded release assets are separately checked
 against `SHA256SUMS`.
